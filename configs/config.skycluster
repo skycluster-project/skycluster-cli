@@ -1,0 +1,7 @@
+kubeconfig:
+  sky-manager: /home/ubuntu/.kube/config
+  sky-app: /tmp/k3s.yaml
+overlay:
+  server: server_ip
+  token: token
+  port: 6443
