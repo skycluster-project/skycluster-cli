@@ -67,7 +67,7 @@ func listFlavors() {
 	if len(availableFlavors) == 0 {
 		fmt.Println("No flavors available")
 	} else {
-		fmt.Fprintln(writer, "NUM\tNAME\tOFFERED BY")
+		fmt.Fprintln(writer, "NAME\tOFFERED BY")
 	}
 	for _, f := range availableFlavors {
 		fmt.Fprintf(writer, "%s\t%d\n", f, len(flavorList))
