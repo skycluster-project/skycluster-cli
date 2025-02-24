@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -13,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 var pNames []string
@@ -47,31 +49,17 @@ func listFlavors() {
 		return
 	}
 	flavorList := make(map[string][]string, 0)
-	baseFilters := "skycluster.io/managed-by=skycluster, skycluster.io/config-type=provider-mappings, "
+	baseFilters := "skycluster.io/managed-by=skycluster, skycluster.io/config-type=provider-mappings"
 	for _, n := range pNames {
-		filters := baseFilters + "skycluster.io/provider-name=" + n
-		confgis, err := clientset.CoreV1().ConfigMaps(vars.SkyClusterName).List(context.Background(), metav1.ListOptions{
-			LabelSelector: filters,
-		})
-		if err != nil {
-			log.Fatalf("Error listing configmaps: %v", err)
-		}
+		filters := baseFilters + ", skycluster.io/provider-name=" + n
+		filteredFlavors := getFlavorData(clientset, filters)
+		maps.Copy(flavorList, filteredFlavors)
+	}
 
-		for _, cm := range confgis.Items {
-			fList := make([]string, 0)
-			pName := cm.Labels["skycluster.io/provider-name"]
-			pRegion := cm.Labels["skycluster.io/provider-region"]
-			pZone := cm.Labels["skycluster.io/provider-zone"]
-			pID := pName + "_" + pRegion + "_" + pZone
-			for d, _ := range cm.Data {
-				if strings.Contains(d, "flavor") {
-					fList = append(fList, d)
-				}
-			}
-			if len(fList) > 0 {
-				flavorList[pID] = fList
-			}
-		}
+	// no provider names provided, get all flavors
+	if len(pNames) == 0 {
+		filteredFlavors := getFlavorData(clientset, baseFilters)
+		maps.Copy(flavorList, filteredFlavors)
 	}
 
 	availableFlavors := utils.IntersectionOfMapValues(flavorList, utils.GetMapStringKeys(flavorList))
@@ -86,6 +74,33 @@ func listFlavors() {
 	}
 	writer.Flush()
 
+}
+
+func getFlavorData(clientset *kubernetes.Clientset, filters string) map[string][]string {
+	flavorList := make(map[string][]string, 0)
+	confgis, err := clientset.CoreV1().ConfigMaps(vars.SkyClusterName).List(context.Background(), metav1.ListOptions{
+		LabelSelector: filters,
+	})
+	if err != nil {
+		log.Fatalf("Error listing configmaps: %v", err)
+	}
+
+	for _, cm := range confgis.Items {
+		fList := make([]string, 0)
+		pName := cm.Labels["skycluster.io/provider-name"]
+		pRegion := cm.Labels["skycluster.io/provider-region"]
+		pZone := cm.Labels["skycluster.io/provider-zone"]
+		pID := pName + "_" + pRegion + "_" + pZone
+		for d, _ := range cm.Data {
+			if strings.Contains(d, "flavor") {
+				fList = append(fList, d)
+			}
+		}
+		if len(fList) > 0 {
+			flavorList[pID] = fList
+		}
+	}
+	return flavorList
 }
 
 func GetFlavorCmd() *cobra.Command {
