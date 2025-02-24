@@ -1,53 +1,40 @@
-package cmd
+package skyprovider
 
 import (
 	"context"
 	"fmt"
 	"log"
-	"strings"
+	"os"
+	"text/tabwriter"
 
+	"github.com/etesami/skycluster-cli/internal/utils"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/tools/clientcmd"
 )
-
-func init() {
-	skyProviderCmd.AddCommand(skyProviderListCmd)
-}
-
-var skyProviderCmd = &cobra.Command{
-	Use:   "skyprovider commands",
-	Short: "SkyProvider commands",
-	// 	Long: `Overlay commands`,
-	// Args: cobra.MinimumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Print: " + strings.Join(args, " "))
-	},
-}
 
 var skyProviderListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List SkyProviders",
 	Run: func(cmd *cobra.Command, args []string) {
-		listSkyProviders()
+		ns, err := cmd.Root().PersistentFlags().GetString("namespace")
+		if err != nil {
+			log.Fatalf("error getting namespace: %v", err)
+			return
+		}
+		listSkyProviders(ns)
 	},
 }
 
-func listSkyProviders() {
+func listSkyProviders(ns string) {
 	kconfig := viper.GetStringMapString("kubeconfig")
 	kubeconfig := kconfig["sky-manager"]
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		log.Fatalf("Error building kubeconfig: %v", err)
-	}
-
-	dynamicClient, err := dynamic.NewForConfig(config)
+	dynamicClient, err := utils.GetDynamicClient(kubeconfig)
 	if err != nil {
 		log.Fatalf("Error creating dynamic client: %v", err)
+		return
 	}
 
 	gvr := schema.GroupVersionResource{
@@ -56,19 +43,29 @@ func listSkyProviders() {
 		Resource: "skyproviders",
 	}
 
-	ns := "skytest"
 	resources, err := dynamicClient.Resource(gvr).Namespace(ns).List(context.Background(), metav1.ListOptions{
 		LabelSelector: "skycluster.io/managed-by=skycluster",
 	})
 	if err != nil {
 		log.Fatalf("Error listing resources: %v", err)
+		return
+	}
+
+	writer := tabwriter.NewWriter(os.Stdout, 0, 8, 1, '\t', tabwriter.AlignRight)
+	if len(resources.Items) == 0 {
+		fmt.Printf("No SkyProviders found in the namespace [%s]\n", ns)
+		return
+	} else {
+		fmt.Fprintln(writer, "NAME\tPRIVATE_IP\tPUBLIC_IP\tNAMESPACE")
 	}
 
 	for _, resource := range resources.Items {
 		stat, found, err := unstructured.NestedMap(resource.Object, "status", "network")
 		if err != nil || !found {
-			log.Fatalf("spec.status not found: %v", err)
+			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", resource.GetName(), "<not-ready>", "<not-ready>", ns)
+		} else {
+			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", resource.GetName(), stat["privateIpAddress"], stat["publicIpAddress"], ns)
 		}
-		fmt.Printf("Resource: %s\t%s\t%s\n", resource.GetName(), stat["privateIpAddress"], stat["publicIpAddress"])
 	}
+	writer.Flush()
 }

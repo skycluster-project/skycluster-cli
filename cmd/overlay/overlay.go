@@ -1,4 +1,4 @@
-package cmd
+package overlay
 
 import (
 	"fmt"
@@ -62,4 +62,8 @@ func overlayJoin() {
 
 	log.Println("Tailscale node started and connected")
 
+}
+
+func GetOverlayCmd() *cobra.Command {
+	return overlayCmd
 }

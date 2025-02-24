@@ -4,17 +4,25 @@ import (
 	"fmt"
 	"os"
 
+	ovl "github.com/etesami/skycluster-cli/cmd/overlay"
+	sp "github.com/etesami/skycluster-cli/cmd/skyprovider"
+	sv "github.com/etesami/skycluster-cli/cmd/skyvm"
+
 	homedir "github.com/mitchellh/go-homedir"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
+
+var cfgFile string
+var kubeconfig string
+var ns string
 
 var rootCmd = &cobra.Command{
 	Use:   "[args]",
 	Short: "SkyCluster Cli is a tool to interact with SkyCluster API",
 	Args:  cobra.ArbitraryArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Root args:", args)
+		cmd.Help()
 	},
 }
 
@@ -27,10 +35,12 @@ func Execute() {
 
 func init() {
 	cobra.OnInitialize(initConfig)
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file")
-	rootCmd.AddCommand(overlayCmd)
-	rootCmd.AddCommand(skyVMCmd)
-	rootCmd.AddCommand(skyProviderCmd)
+	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file")
+	rootCmd.PersistentFlags().StringVarP(&ns, "namespace", "n", "", "namespace")
+	rootCmd.CompletionOptions.DisableDefaultCmd = true
+	rootCmd.AddCommand(ovl.GetOverlayCmd())
+	rootCmd.AddCommand(sp.GetSkyProviderCmd())
+	rootCmd.AddCommand(sv.GetSkyVMCmd())
 }
 
 func initConfig() {
