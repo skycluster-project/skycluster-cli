@@ -10,6 +10,7 @@ func init() {
 	skyVMCmd.AddCommand(skyVMListCmd)
 	skyVMCmd.AddCommand(flavor.GetFlavorCmd())
 	skyVMCmd.AddCommand(image.GetImageCmd())
+	skyVMCmd.AddCommand(skyVMDeleteCmd)
 }
 
 var skyVMCmd = &cobra.Command{

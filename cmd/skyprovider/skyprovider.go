@@ -6,6 +6,7 @@ import (
 
 func init() {
 	skyProviderCmd.AddCommand(skyProviderListCmd)
+	skyProviderCmd.AddCommand(skyProviderDeleteCmd)
 }
 
 var skyProviderCmd = &cobra.Command{
