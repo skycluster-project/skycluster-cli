@@ -22,10 +22,9 @@ import (
 
 var deleteAll *bool
 var pNames []string
-var providerNames []string
 
 func init() {
-	skyProviderDeleteCmd.PersistentFlags().StringSliceVar(&pNames, "provider-name", nil, "Provider Names, seperated by comma")
+	skyProviderDeleteCmd.PersistentFlags().StringSliceVarP(&pNames, "provider-name", "p", nil, "Provider Names, seperated by comma")
 	deleteAll = skyProviderDeleteCmd.PersistentFlags().BoolP("all", "a", false, "Delete all SkyProviders")
 }
 

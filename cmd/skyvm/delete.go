@@ -25,7 +25,7 @@ var pNames []string
 var vmNames []string
 
 func init() {
-	skyVMDeleteCmd.PersistentFlags().StringSliceVar(&pNames, "provider-name", nil, "Provider Names, seperated by comma")
+	skyVMDeleteCmd.PersistentFlags().StringSliceVarP(&pNames, "provider-name", "p", nil, "Provider Names, seperated by comma")
 	deleteAll = skyVMDeleteCmd.PersistentFlags().BoolP("all", "a", false, "Delete all SkyVMs")
 }
 
@@ -74,7 +74,7 @@ func getVMData(dynamicClient dynamic.Interface, ns string, filters string) []uns
 	gvr := schema.GroupVersionResource{
 		Group:    "xrds.skycluster.io",
 		Version:  "v1alpha1",
-		Resource: "skyvms",
+		Resource: "xvms",
 	}
 
 	resources, err := dynamicClient.Resource(gvr).Namespace(ns).List(context.Background(), metav1.ListOptions{
@@ -136,7 +136,7 @@ func deleteVMs(dynamicClient dynamic.Interface, ns string, items []unstructured.
 		err := dynamicClient.Resource(schema.GroupVersionResource{
 			Group:    "xrds.skycluster.io",
 			Version:  "v1alpha1",
-			Resource: "skyvms",
+			Resource: "xvms",
 		}).Namespace(ns).Delete(context.Background(), resource.GetName(), metav1.DeleteOptions{})
 		if err != nil {
 			log.Fatalf("Error deleting resource: %v", err)

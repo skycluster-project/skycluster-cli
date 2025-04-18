@@ -12,7 +12,6 @@ import (
 )
 
 func init() {
-	overlayCmd.AddCommand(overlayListCmd)
 	overlayCmd.AddCommand(overlayJoinCmd)
 }
 
@@ -22,7 +21,7 @@ var overlayCmd = &cobra.Command{
 	// 	Long: `Overlay commands`,
 	// Args: cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Print: " + strings.Join(args, " "))
+		fmt.Println("The overlay sub command is not yet working: " + strings.Join(args, " "))
 	},
 }
 
@@ -32,14 +31,6 @@ var overlayJoinCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Joining overlay: " + strings.Join(args, " "))
 
-	},
-}
-
-var overlayListCmd = &cobra.Command{
-	Use:   "join",
-	Short: "Join overlay",
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("List overlay: " + strings.Join(args, " "))
 	},
 }
 

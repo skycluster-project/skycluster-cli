@@ -21,7 +21,7 @@ var pNames []string
 
 func init() {
 	flavorCmd.AddCommand(flavorListCmd)
-	flavorListCmd.PersistentFlags().StringSliceVar(&pNames, "provider-name", nil, "Provider Names, seperated by comma")
+	flavorListCmd.PersistentFlags().StringSliceVarP(&pNames, "provider-name", "p", nil, "Provider Names, seperated by comma")
 }
 
 var flavorCmd = &cobra.Command{

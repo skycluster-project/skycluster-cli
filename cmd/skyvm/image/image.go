@@ -21,7 +21,7 @@ var pNames []string
 
 func init() {
 	imageCmd.AddCommand(imageListCmd)
-	imageListCmd.PersistentFlags().StringSliceVar(&pNames, "provider-name", nil, "Provider Names, seperated by comma")
+	imageListCmd.PersistentFlags().StringSliceVarP(&pNames, "provider-name", "p", nil, "Provider Names, seperated by comma")
 }
 
 var imageCmd = &cobra.Command{

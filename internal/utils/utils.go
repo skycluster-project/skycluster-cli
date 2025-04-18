@@ -56,7 +56,7 @@ func GetCombinations(arr []string) [][]string {
 	return result
 }
 
-func traverseMapString(m map[string]interface{}, fields ...string) (string, error) {
+func TraverseMapString(m map[string]interface{}, fields ...string) (string, error) {
 	for _, field := range fields[:len(fields)-1] {
 		v, ok := m[field]
 		if !ok {

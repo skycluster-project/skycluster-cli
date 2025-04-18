@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	ks "github.com/etesami/skycluster-cli/cmd/k8s"
 	ovl "github.com/etesami/skycluster-cli/cmd/overlay"
 	sp "github.com/etesami/skycluster-cli/cmd/skyprovider"
 	sv "github.com/etesami/skycluster-cli/cmd/skyvm"
@@ -41,6 +42,7 @@ func init() {
 	rootCmd.AddCommand(ovl.GetOverlayCmd())
 	rootCmd.AddCommand(sp.GetSkyProviderCmd())
 	rootCmd.AddCommand(sv.GetSkyVMCmd())
+	rootCmd.AddCommand(ks.GetSkyK8SCmd())
 }
 
 func initConfig() {
