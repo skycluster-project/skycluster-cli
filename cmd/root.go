@@ -5,9 +5,8 @@ import (
 	"os"
 
 	ks "github.com/etesami/skycluster-cli/cmd/k8s"
-	ovl "github.com/etesami/skycluster-cli/cmd/overlay"
-	sp "github.com/etesami/skycluster-cli/cmd/skyprovider"
 	sv "github.com/etesami/skycluster-cli/cmd/skyvm"
+	sp "github.com/etesami/skycluster-cli/cmd/xprovider"
 
 	homedir "github.com/mitchellh/go-homedir"
 	"github.com/spf13/cobra"
@@ -39,10 +38,11 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file")
 	rootCmd.PersistentFlags().StringVarP(&ns, "namespace", "n", "", "namespace")
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
-	rootCmd.AddCommand(ovl.GetOverlayCmd())
-	rootCmd.AddCommand(sp.GetSkyProviderCmd())
-	rootCmd.AddCommand(sv.GetSkyVMCmd())
-	rootCmd.AddCommand(ks.GetSkyK8SCmd())
+	// rootCmd.AddCommand(dp.GetDependencyCmd())
+	// rootCmd.AddCommand(ovl.GetOverlayCmd())
+	rootCmd.AddCommand(sp.GetXProviderCmd())
+	rootCmd.AddCommand(sv.GetXInstanceCmd())
+	rootCmd.AddCommand(ks.GetXKubeCmd())
 }
 
 func initConfig() {
@@ -59,8 +59,8 @@ func initConfig() {
 		}
 
 		// Search config in home directory with name ".skycluster" (without extension).
-		viper.AddConfigPath(home)
-		viper.SetConfigName(".skycluster")
+		viper.AddConfigPath(home + "/.skycluster")
+		viper.SetConfigName("config")
 		viper.SetConfigType("yaml")
 	}
 

@@ -1,9 +1,10 @@
 module github.com/etesami/skycluster-cli
 
-go 1.23.4
+go 1.24.4
 
 require (
 	github.com/mitchellh/go-homedir v1.1.0
+	github.com/samber/lo v1.51.0
 	github.com/spf13/cobra v1.8.1
 	github.com/spf13/viper v1.16.0
 	k8s.io/apimachinery v0.32.0
@@ -109,10 +110,10 @@ require (
 	golang.org/x/mod v0.22.0 // indirect
 	golang.org/x/net v0.34.0 // indirect
 	golang.org/x/oauth2 v0.25.0 // indirect
-	golang.org/x/sync v0.10.0 // indirect
+	golang.org/x/sync v0.11.0 // indirect
 	golang.org/x/sys v0.29.1-0.20250107080300-1c14dcadc3ab // indirect
 	golang.org/x/term v0.28.0 // indirect
-	golang.org/x/text v0.21.0 // indirect
+	golang.org/x/text v0.22.0 // indirect
 	golang.org/x/time v0.9.0 // indirect
 	golang.org/x/tools v0.29.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
