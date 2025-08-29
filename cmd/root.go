@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	ks "github.com/etesami/skycluster-cli/cmd/k8s"
-	sv "github.com/etesami/skycluster-cli/cmd/skyvm"
+	sv "github.com/etesami/skycluster-cli/cmd/xinstance"
+	ks "github.com/etesami/skycluster-cli/cmd/xkube"
 	sp "github.com/etesami/skycluster-cli/cmd/xprovider"
 
 	homedir "github.com/mitchellh/go-homedir"
@@ -68,4 +68,11 @@ func initConfig() {
 		fmt.Println("Can't read config:", err)
 		os.Exit(1)
 	}
+
+	// // Bind CLI flags to viper keys
+	// _ = viper.BindPFlag("namespace", rootCmd.PersistentFlags().Lookup("namespace"))
+	// // If namespace flag not provided, read from config
+	// if ns == "" {
+	// 	ns = viper.GetString("namespace")
+	// }
 }

@@ -1,4 +1,4 @@
-package skyvm
+package xinstance
 
 import (
 	"bufio"
