@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	sub "github.com/etesami/skycluster-cli/cmd/subnet"
 	sv "github.com/etesami/skycluster-cli/cmd/xinstance"
 	ks "github.com/etesami/skycluster-cli/cmd/xkube"
 	sp "github.com/etesami/skycluster-cli/cmd/xprovider"
@@ -14,11 +15,9 @@ import (
 )
 
 var cfgFile string
-var kubeconfig string
 var ns string
 
 var rootCmd = &cobra.Command{
-	Use:   "[args]",
 	Short: "SkyCluster Cli is a tool to interact with SkyCluster API",
 	Args:  cobra.ArbitraryArgs,
 	Run: func(cmd *cobra.Command, args []string) {
@@ -43,6 +42,7 @@ func init() {
 	rootCmd.AddCommand(sp.GetXProviderCmd())
 	rootCmd.AddCommand(sv.GetXInstanceCmd())
 	rootCmd.AddCommand(ks.GetXKubeCmd())
+	rootCmd.AddCommand(sub.GetSubnetCmd())
 }
 
 func initConfig() {

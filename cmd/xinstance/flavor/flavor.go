@@ -25,7 +25,7 @@ func init() {
 }
 
 var flavorCmd = &cobra.Command{
-	Use:   "flavor commands",
+	Use:   "flavor",
 	Short: "Flavor commands",
 	Run: func(cmd *cobra.Command, args []string) {
 		cmd.Help()

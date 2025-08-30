@@ -10,7 +10,7 @@ func init() {
 }
 
 var xProviderCmd = &cobra.Command{
-	Use:   "xprovider commands",
+	Use:   "xprovider",
 	Short: "XProvider commands",
 	Run: func(cmd *cobra.Command, args []string) {
 		if len(args) == 0 {

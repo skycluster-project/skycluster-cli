@@ -25,7 +25,7 @@ func init() {
 }
 
 var imageCmd = &cobra.Command{
-	Use:   "image commands",
+	Use:   "image",
 	Short: "Image commands",
 	Run: func(cmd *cobra.Command, args []string) {
 		cmd.Help()
