@@ -2,16 +2,21 @@ package subnet
 
 import (
 	"fmt"
-	"io"
 	"net"
 	"os"
+	"strings"
 	"text/tabwriter"
+
+	lo "github.com/samber/lo"
 
 	"github.com/spf13/cobra"
 )
 
+var provider string
+
 func init() {
 	// subnetCmd.AddCommand(subnetCmd)
+	subnetCmd.PersistentFlags().StringVarP(&provider, "provider", "p", "aws", "Cloud provider (openstack, aws, azure, gcp)")
 }
 
 var subnetCmd = &cobra.Command{
@@ -22,30 +27,48 @@ var subnetCmd = &cobra.Command{
 			cmd.Help()
 			return
 		}
-		calculateSubnets(args[0])
+		err := checkCIDR(args[0]); if err != nil {
+			fmt.Println("This tool only supports CIDR in 10.0.0.0/8. Use other CIDRs at your own discretion.")
+			return
+		}
+		switch provider {
+		case "aws":
+			calculateAWSSubnets(args[0])
+		case "gcp":
+			calculateGCPSubnets(args[0])	
+		default:
+			fmt.Println("Unsupported provider")
+			return
+		}
+		
+		fmt.Printf("\n%s\t%s\n",
+			"Note:", "You can use any CIDR within the Subnet Ranges for your XProvider configuration.")
+		// fmt.Printf("\n%s\t%s\n",
+		// 	"Note:", "This tool provides a basic subnet calculation for SkyCluster environment.")
+
 	},
 }
-
 
 func GetSubnetCmd() *cobra.Command {
 	return subnetCmd
 }
 
-func calculateSubnets(cidr string) {
+func checkCIDR(cidr string) error {
+	// check if cidr starts with 10.
+	// if it does not, return error
+	if !strings.HasPrefix(cidr, "10.") {
+		return fmt.Errorf("wrong cidr")
+	}
+	return nil
+}
+
+/*
+ GCP Helper function
+*/
+func calculateGCPSubnets(cidr string) {
 
 	vpcCIDR := cidr
-
 	splitVPC, err := subnetSplit(vpcCIDR, 1)
-	if err != nil {
-		panic(err)
-	}
-
-	podCIDRs, err := subnetSplit(splitVPC[0].String(), 1)
-	if err != nil {
-		panic(err)
-	}
-
-	subnetCIDRs, err := subnetSplit(splitVPC[1].String(), 1)
 	if err != nil {
 		panic(err)
 	}
@@ -56,25 +79,79 @@ func calculateSubnets(cidr string) {
 		cidr: vpcCIDR,
 		children: []*node{
 			{
-				name: "Pod Range",
-				cidr: splitVPC[0].String(),
-				children: []*node{
-					{name: "Private Pod", cidr: podCIDRs[0].String()},
-					{name: "Public Pod", cidr: podCIDRs[1].String()},
-				},
-			},
-			{
 				name: "Subnet Range",
 				cidr: splitVPC[1].String(),
+				children: []*node{},
+			},
+		},
+	}
+
+	podCidr, err := buildSubnet(vpcCIDR, 192, 168)
+	if err != nil {
+		panic(err)
+	}
+	podRoot := &node{
+		name: "Pod Range",
+		cidr: podCidr.String(),
+		children: nil,
+	}
+	svcCidr, err := buildSubnet(vpcCIDR, 172)
+	if err != nil {
+		panic(err)
+	}
+	svcRoot := &node{
+		name: "Service Range",
+		cidr: svcCidr.String(),
+		children: nil,
+	}
+
+	// Render with alignment
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 4, ' ', 0)
+	fmt.Fprintln(tw, "NAME\tCIDR")
+	printTree(tw, root, "", true)
+	printTree(tw, podRoot, "", true)
+	printTree(tw, svcRoot, "", true)
+	if err := tw.Flush(); err != nil {
+		panic(err)
+	}
+}
+
+/*
+ AWS Subnet Calculation
+*/
+func calculateAWSSubnets(cidr string) {
+
+	vpcCIDR := cidr
+	splitVPC, err := subnetSplit(vpcCIDR, 1)
+	if err != nil {
+		panic(err)
+	}
+
+	podCIDRs, err := subnetSplit(splitVPC[1].String(), 1)
+	if err != nil {
+		panic(err)
+	}
+
+	// Build hierarchy
+	root := &node{
+		name: "VPC",
+		cidr: vpcCIDR,
+		children: []*node{{
+				name: "Subnet Range",
+				cidr: splitVPC[0].String(),
+				children: []*node{},
+			}, {
+				name: "Pod Range",
+				cidr: splitVPC[1].String(),
 				children: []*node{
-					{name: "Private Subnet", cidr: subnetCIDRs[0].String()},
-					{name: "Public Subnet", cidr: subnetCIDRs[1].String()},
+					{name: "Primary", cidr: podCIDRs[0].String()},
+					{name: "Secondary", cidr: podCIDRs[1].String()},
 				},
 			},
 		},
 	}
 
-	svcCidr, err := svcSubnet(vpcCIDR)
+	svcCidr, err := buildSubnet(vpcCIDR, 172)
 	if err != nil {
 		panic(err)
 	}
@@ -92,104 +169,36 @@ func calculateSubnets(cidr string) {
 	if err := tw.Flush(); err != nil {
 		panic(err)
 	}
-
-	// writer := tabwriter.NewWriter(os.Stdout, 0, 0, 4, ' ', 0)
-
-	// fmt.Fprintln(writer, "NAME\tCIDR")
-	// fmt.Fprintf(writer, "VPC\t%s\n", vpcCIDR)
-
-	// fmt.Fprintf(writer, "Pod Range\t%s\n", splitVPC[0].String())
-	// fmt.Fprintf(writer, "  Private Pod\t%s\n", podCIDRs[0].String())
-	// fmt.Fprintf(writer, "  Public Pod\t%s\n", podCIDRs[1].String())
-
-	// fmt.Fprintf(writer, "Subnet Range\t%s\n", splitVPC[1].String())
-	// fmt.Fprintf(writer, "  Private Subnet\t%s\n", subnetCIDRs[0].String())
-	// fmt.Fprintf(writer, "  Public Subnet\t%s\n", subnetCIDRs[1].String())
-
-	// writer.Flush()
 }
 
-// subnetSplit splits a CIDR into 2^levels subnets
-func subnetSplit(cidr string, levels int) ([]*net.IPNet, error) {
+// Helper function
+func buildSubnet(cidr string, octets ...int) (*net.IPNet, error) {
 	_, ipnet, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return nil, err
 	}
 
-	subnets := []*net.IPNet{ipnet}
+	octetsBytes := lo.Map(octets, func(o int, _ int) byte {return byte(o)})
 
-	// For each level, split each subnet in half
-	for i := 0; i < levels; i++ {
-		var next []*net.IPNet
-		for _, sn := range subnets {
-			// Get mask size
-			ones, bits := sn.Mask.Size()
-			if ones >= bits {
-				return nil, fmt.Errorf("cannot split subnet %s further", sn.String())
-			}
+	// Construct new subnet <first>.<second>.<base>.0/24
+	firstOctet  := lo.NthOr(octetsBytes, 0, ipnet.IP[0])
+	secondOctet := lo.NthOr(octetsBytes, 1, ipnet.IP[1])
+	baseOctet   := lo.NthOr(octetsBytes, 2, ipnet.IP[2])
 
-			// First subnet (same base IP, longer prefix)
-			first := &net.IPNet{
-				IP:   sn.IP.Mask(net.CIDRMask(ones+1, bits)),
-				Mask: net.CIDRMask(ones+1, bits),
-			}
-
-			// Second subnet (base + offset)
-			secondIP := make(net.IP, len(sn.IP))
-			copy(secondIP, sn.IP)
-			increment := 1 << (uint(bits-ones-1))
-			for j := len(secondIP) - 1; j >= 0 && increment > 0; j-- {
-				val := int(secondIP[j]) + increment
-				secondIP[j] = byte(val % 256)
-				increment = val / 256
-			}
-			second := &net.IPNet{
-				IP:   secondIP.Mask(net.CIDRMask(ones+1, bits)),
-				Mask: net.CIDRMask(ones+1, bits),
-			}
-
-			next = append(next, first, second)
-		}
-		subnets = next
+	ones := 24
+	switch len(octets) {
+	case 1:
+		ones = 16
+	case 2:
+		ones = 24
+	case 3:
+		ones = 32
 	}
 
-	return subnets, nil
-}
-
-func svcSubnet(cidr string) (*net.IPNet, error) {
-	_, ipnet, err := net.ParseCIDR(cidr)
-	if err != nil {
-		return nil, err
-	}
-	// Extract the 2nd octet
-	secondOctet := ipnet.IP[1]
-
-	// Construct new IP 172.<secondOctet>.0.0/16
-	newIP := net.IPv4(172, secondOctet, 0, 0)
+	newIP := net.IPv4(firstOctet, secondOctet, baseOctet, 0)
 	newCIDR := &net.IPNet{
 		IP:   newIP,
-		Mask: net.CIDRMask(16, 32),
+		Mask: net.CIDRMask(ones, 32), // fixed /24
 	}
 	return newCIDR, nil
-}
-
-type node struct {
-	name     string
-	cidr     string
-	children []*node
-}
-
-func printTree(w io.Writer, n *node, prefix string, isLast bool) {
-	branch := "├── "
-	nextPrefix := prefix + "│   "
-	if isLast {
-		branch = "└── "
-		nextPrefix = prefix + "    "
-	}
-	// Use tabwriter alignment between name (with tree branches) and CIDR
-	fmt.Fprintf(w, "%s%s%s\t%s\n", prefix, branch, n.name, n.cidr)
-
-	for i, c := range n.children {
-		printTree(w, c, nextPrefix, i == len(n.children)-1)
-	}
 }
