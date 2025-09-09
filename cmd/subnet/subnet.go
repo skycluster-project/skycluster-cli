@@ -36,6 +36,8 @@ var subnetCmd = &cobra.Command{
 			calculateAWSSubnets(args[0])
 		case "gcp":
 			calculateGCPSubnets(args[0])	
+			fmt.Printf("\n%s\t%s\n",
+			"Note:", "For GCP GKE service, you need to specify a subnet range for nodes (XKube Nodes)")
 		default:
 			fmt.Println("Unsupported provider")
 			return
@@ -72,7 +74,7 @@ func calculateGCPSubnets(cidr string) {
 	if err != nil {
 		panic(err)
 	}
-
+	
 	// Build hierarchy
 	root := &node{
 		name: "VPC",
@@ -80,28 +82,24 @@ func calculateGCPSubnets(cidr string) {
 		children: []*node{
 			{
 				name: "Subnet Range",
+				cidr: splitVPC[0].String(),
+				children: []*node{},
+			},
+			{
+				name: "XKube Node Range (GKE)",
 				cidr: splitVPC[1].String(),
 				children: []*node{},
 			},
 		},
 	}
 
-	podCidr, err := buildSubnet(vpcCIDR, 192, 168)
+	podCidr, err := buildSubnet(vpcCIDR, 172)
 	if err != nil {
 		panic(err)
 	}
 	podRoot := &node{
-		name: "Pod Range",
+		name: "Pod/Service Range",
 		cidr: podCidr.String(),
-		children: nil,
-	}
-	svcCidr, err := buildSubnet(vpcCIDR, 172)
-	if err != nil {
-		panic(err)
-	}
-	svcRoot := &node{
-		name: "Service Range",
-		cidr: svcCidr.String(),
 		children: nil,
 	}
 
@@ -110,7 +108,6 @@ func calculateGCPSubnets(cidr string) {
 	fmt.Fprintln(tw, "NAME\tCIDR")
 	printTree(tw, root, "", true)
 	printTree(tw, podRoot, "", true)
-	printTree(tw, svcRoot, "", true)
 	if err := tw.Flush(); err != nil {
 		panic(err)
 	}
@@ -141,7 +138,7 @@ func calculateAWSSubnets(cidr string) {
 				cidr: splitVPC[0].String(),
 				children: []*node{},
 			}, {
-				name: "Pod Range",
+				name: "XKube Pod Range (EKS)",
 				cidr: splitVPC[1].String(),
 				children: []*node{
 					{name: "Primary", cidr: podCIDRs[0].String()},
@@ -155,8 +152,10 @@ func calculateAWSSubnets(cidr string) {
 	if err != nil {
 		panic(err)
 	}
+
+	// svcCidr := "172.16.0.0/16"
 	svcRoot := &node{
-		name: "Service Range",
+		name: "XKube Service Range (EKS)",
 		cidr: svcCidr.String(),
 		children: nil,
 	}
