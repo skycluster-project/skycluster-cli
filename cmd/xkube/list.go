@@ -132,7 +132,10 @@ func listXKubes(ns string) {
 		for _, c := range ctrls {
 			m, ok := c.(map[string]interface{})
 			if ok {
-				ctrlIp = m["publicIp"].(string)
+				ctrlIp, ok = m["publicIp"].(string)
+				if !ok {
+					ctrlIp = ""
+				}
 				break // only one controller is expected
 			}
 		}
