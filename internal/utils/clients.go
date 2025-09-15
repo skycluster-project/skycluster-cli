@@ -3,6 +3,7 @@ package utils
 import (
 	"os"
 
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -42,4 +43,22 @@ func GetClientset(kubeconfig string) (*clientset.Clientset, error) {
 		return nil, err
 	}
 	return clientset, nil
+}
+
+func GetDiscoveryClient(kubeconfig string) (*discovery.DiscoveryClient, error) {
+	// check if the file exists
+	if _, err := os.Stat(kubeconfig); os.IsNotExist(err) {
+		return nil, err
+	}
+
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	if err != nil {
+		return nil, err
+	}
+
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	return discoveryClient, nil
 }
