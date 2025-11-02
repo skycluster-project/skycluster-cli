@@ -118,29 +118,30 @@ func listXKubes(ns string) {
 		fmt.Printf("No XKube found in the namespace [%s]\n", ns)
 		return
 		} else {
-		fmt.Fprintln(writer, "NAME\tGATEWAY\tPOD_CIDR\tSERVICE_CIDR\tLOCATION\tEXTERNAL_NAME")
+		fmt.Fprintln(writer, "NAME\tPLATFORM\tPOD_CIDR\tSERVICE_CIDR\tLOCATION\tEXTERNAL_NAME")
 	}
 
 	for _, resource := range resources.Items {
 		podCidr, _, _ := unstructured.NestedString(resource.Object, "status", "podCidr")
 		svcCidr, _, _ := unstructured.NestedString(resource.Object, "status", "serviceCidr")
 		// agents, _, _ := unstructured.NestedSlice(resource.Object, "status", "agents")
-		ctrls, _, _ := unstructured.NestedSlice(resource.Object, "status", "controllers")
+		provPlatform, _, _ := unstructured.NestedString(resource.Object, "spec", "providerRef", "platform")
+		// ctrls, _, _ := unstructured.NestedSlice(resource.Object, "status", "controllers")
 		provCfgZones, _, _ := unstructured.NestedStringMap(resource.Object, "spec", "providerRef", "zones")
 		extName, _, _ := unstructured.NestedString(resource.Object, "status", "externalClusterName")
-		ctrlIp := ""
-		for _, c := range ctrls {
-			m, ok := c.(map[string]interface{})
-			if ok {
-				ctrlIp, ok = m["publicIp"].(string)
-				if !ok {
-					ctrlIp = ""
-				}
-				break // only one controller is expected
-			}
-		}
+		// ctrlIp := ""
+		// for _, c := range ctrls {
+		// 	m, ok := c.(map[string]interface{})
+		// 	if ok {
+		// 		ctrlIp, ok = m["publicIp"].(string)
+		// 		if !ok {
+		// 			ctrlIp = ""
+		// 		}
+		// 		break // only one controller is expected
+		// 	}
+		// }
 
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n", resource.GetName(), ctrlIp, podCidr, svcCidr, provCfgZones["primary"], extName)
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n", resource.GetName(), provPlatform, podCidr, svcCidr, provCfgZones["primary"], extName)
 	}
 	writer.Flush()
 }
