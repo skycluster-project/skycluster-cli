@@ -8,6 +8,7 @@ import (
 	sv "github.com/etesami/skycluster-cli/cmd/xinstance"
 	ks "github.com/etesami/skycluster-cli/cmd/xkube"
 	sp "github.com/etesami/skycluster-cli/cmd/xprovider"
+	st "github.com/etesami/skycluster-cli/cmd/setup"
 
 	homedir "github.com/mitchellh/go-homedir"
 	"github.com/spf13/cobra"
@@ -39,6 +40,7 @@ func init() {
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	// rootCmd.AddCommand(dp.GetDependencyCmd())
 	// rootCmd.AddCommand(ovl.GetOverlayCmd())
+	rootCmd.AddCommand(st.GetSetupCmd())
 	rootCmd.AddCommand(sp.GetXProviderCmd())
 	rootCmd.AddCommand(sv.GetXInstanceCmd())
 	rootCmd.AddCommand(ks.GetXKubeCmd())
