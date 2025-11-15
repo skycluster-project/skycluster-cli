@@ -6,10 +6,10 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"github.com/spf13/viper"
 
 	"github.com/etesami/skycluster-cli/internal/utils"
 )
@@ -44,15 +44,24 @@ var cleanupCmd = &cobra.Command{
 
 		for _, name := range secretsToDelete {
 			if err := deleteSecretIfExists(ctx, clientset, namespace, name); err != nil {
-				errs = append(errs, fmt.Sprintf("%s: %v", name, err))
+				errs = append(errs, fmt.Sprintf("secret %s: %v", name, err))
 			}
 		}
 
-		if len(errs) > 0 {
-			return fmt.Errorf("errors deleting secrets: %s", strings.Join(errs, "; "))
+		// remove any pods with label skycluster.io/job-type=istio-ca-certs
+		if err := deletePodsWithLabel(ctx, clientset, namespace, "skycluster.io/job-type", "istio-ca-certs"); err != nil {
+			errs = append(errs, fmt.Sprintf("pods: %v", err))
+		}
+		// remove any pods with label skycluster.io/job-type=istio-ca-certs
+		if err := deletePodsWithLabel(ctx, clientset, namespace, "skycluster.io/job-type", "headscale-cert-gen"); err != nil {
+			errs = append(errs, fmt.Sprintf("pods: %v", err))
 		}
 
-		fmt.Println("Requested secrets removed (or already absent).")
+		if len(errs) > 0 {
+			return fmt.Errorf("errors during cleanup: %s", strings.Join(errs, "; "))
+		}
+
+		fmt.Println("Requested secrets and matching pods removed (or already absent).")
 		return nil
 	},
 }
@@ -71,4 +80,37 @@ func deleteSecretIfExists(ctx context.Context, clientset *kubernetes.Clientset, 
 		return nil
 	}
 	return fmt.Errorf("delete failed: %w", err)
+}
+
+// deletePodsWithLabel finds pods in the namespace matching labelKey=labelValue and deletes them.
+// If none found, it's treated as success.
+func deletePodsWithLabel(ctx context.Context, clientset *kubernetes.Clientset, ns, labelKey, labelValue string) error {
+	labelSelector := fmt.Sprintf("%s=%s", labelKey, labelValue)
+	pods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+	if err != nil {
+		return fmt.Errorf("listing pods failed: %w", err)
+	}
+	if len(pods.Items) == 0 {
+		fmt.Printf("No pods found in %s with label %s\n", ns, labelSelector)
+		return nil
+	}
+
+	var errs []string
+	for _, p := range pods.Items {
+		err := clientset.CoreV1().Pods(ns).Delete(ctx, p.Name, metav1.DeleteOptions{})
+		if err == nil {
+			fmt.Printf("Deleted pod %s/%s\n", ns, p.Name)
+			continue
+		}
+		if apierrors.IsNotFound(err) {
+			fmt.Printf("Pod %s/%s not found; skipping\n", ns, p.Name)
+			continue
+		}
+		errs = append(errs, fmt.Sprintf("%s: %v", p.Name, err))
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("errors deleting pods: %s", strings.Join(errs, "; "))
+	}
+	return nil
 }
