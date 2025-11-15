@@ -23,14 +23,12 @@ import (
 var (
 	publicKeyPath  string
 	privateKeyPath string
-	kubeconfigPath string
 )
 
 func init() {
 	// Use Cobra flags (also support go test / `go run` style flags fallback)
 	setupCmd.Flags().StringVar(&publicKeyPath, "public", "", "Path to public key (e.g. ~/.ssh/id_rsa.pub)")
 	setupCmd.Flags().StringVar(&privateKeyPath, "private", "", "Path to private key (e.g. ~/.ssh/id_rsa)")
-	setupCmd.Flags().StringVar(&kubeconfigPath, "kubeconfig", "", "Path to kubeconfig to store in secret")
 	// make flags available to library using standard flag package (optional)
 	_ = flag.CommandLine.Parse([]string{})
 }
@@ -40,8 +38,8 @@ var setupCmd = &cobra.Command{
 	Short: "Setup commands",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Validate required flags
-		if publicKeyPath == "" || privateKeyPath == "" || kubeconfigPath == "" {
-			return errors.New("flags --public, --private and --kubeconfig are required")
+		if publicKeyPath == "" || privateKeyPath == "" {
+			return errors.New("flags --public, --private are required")
 		}
 
 		// check files exist and read them
@@ -53,6 +51,8 @@ var setupCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("reading private key: %w", err)
 		}
+
+		kubeconfigPath := viper.GetString("kubeconfig")
 		kubeBytes, err := os.ReadFile(expandPath(kubeconfigPath))
 		if err != nil {
 			return fmt.Errorf("reading kubeconfig: %w", err)
@@ -108,8 +108,7 @@ var setupCmd = &cobra.Command{
 		}
 
 		// Create client using in-cluster config
-		kubeconfig := viper.GetString("kubeconfig")
-		clientset, err := utils.GetClientset(kubeconfig)
+		clientset, err := utils.GetClientset(kubeconfigPath)
 		if err != nil {
 			return fmt.Errorf("build kubernetes client: %w", err)
 		}

@@ -9,6 +9,7 @@ import (
 	ks "github.com/etesami/skycluster-cli/cmd/xkube"
 	sp "github.com/etesami/skycluster-cli/cmd/xprovider"
 	st "github.com/etesami/skycluster-cli/cmd/setup"
+	cl "github.com/etesami/skycluster-cli/cmd/cleanup"
 
 	homedir "github.com/mitchellh/go-homedir"
 	"github.com/spf13/cobra"
@@ -45,6 +46,7 @@ func init() {
 	rootCmd.AddCommand(sv.GetXInstanceCmd())
 	rootCmd.AddCommand(ks.GetXKubeCmd())
 	rootCmd.AddCommand(sub.GetSubnetCmd())
+	rootCmd.AddCommand(cl.GetCleanupCmd())
 }
 
 func initConfig() {
