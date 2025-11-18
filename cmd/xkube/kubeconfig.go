@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -71,7 +72,74 @@ func showConfigs(kubeNames []string, ns string) {
 			log.Printf("Error fetching config [%s]: %v", c, err)
 			continue
 		}
-		// Process the object as needed
+
+		// Determine platform from spec.providerRef.platform
+		platform, _, _ := unstructured.NestedString(obj.Object, "spec", "providerRef", "platform")
+
+		// If platform is gcp, use gcloud to obtain credentials (temporary kubeconfig)
+		if platform == "gcp" {
+			// Expect status.clusterName to exist for GKE clusters
+			clusterName, _, _ := unstructured.NestedString(obj.Object, "status", "externalClusterName")
+			if clusterName == "" {
+				log.Printf("GCP platform detected for [%s] but status.externalClusterName not present; skipping", c)
+				continue
+			}
+
+			// Extract location from spec.providerRef.zones.primary
+			provCfgZones, foundZones, err := unstructured.NestedStringMap(obj.Object, "spec", "providerRef", "zones")
+			if err != nil {
+				log.Printf("Error reading providerRef.zones for [%s]: %v", c, err)
+				continue
+			}
+			if !foundZones {
+				log.Printf("providerRef.zones not found for [%s]; cannot determine GKE location", c)
+				continue
+			}
+			location := provCfgZones["primary"]
+			if location == "" {
+				log.Printf("primary zone not set in providerRef.zones for [%s]; cannot determine GKE location", c)
+				continue
+			}
+
+			// Create a temporary kubeconfig file for gcloud to write into
+			tmpFile, err := os.CreateTemp("", "gke-kubeconfig-*")
+			if err != nil {
+				log.Fatalf("failed to create temporary kubeconfig file for [%s]: %v", c, err)
+			}
+			tmpName := tmpFile.Name()
+			if err := tmpFile.Close(); err != nil {
+				// not fatal, but log
+				log.Printf("warning: closing temp file %s: %v", tmpName, err)
+			}
+
+			// Run gcloud with KUBECONFIG env pointing to tmpName
+			// Using --zone; if your clusters are regional you may want to use --region instead.
+			gcCmd := exec.Command("gcloud", "container", "clusters", "get-credentials", clusterName, "--location", location)
+			gcCmd.Env = append(os.Environ(), "KUBECONFIG="+tmpName)
+			out, err := gcCmd.CombinedOutput()
+			if err != nil {
+				// Per your request, on gcloud errors we print and terminate.
+				log.Fatalf("gcloud failed to get credentials for cluster %s (location=%s): %v\nOutput: %s", clusterName, location, err, string(out))
+			}
+
+			kubeconfigBytes, err := os.ReadFile(tmpName)
+			// Attempt to remove temp file immediately after reading (ignore removal error)
+			_ = os.Remove(tmpName)
+			if err != nil {
+				log.Fatalf("failed to read kubeconfig written by gcloud for [%s]: %v", c, err)
+			}
+
+			staticKubeconfig, err := ensureStaticKubeconfig(kubeconfigBytes, c, "skycluster-system")
+			if err != nil {
+				log.Printf("Error creating static kubeconfig for [%s]: %v", c, err)
+				continue
+			}
+
+			kubeconfigs = append(kubeconfigs, staticKubeconfig)
+			continue
+		}
+
+		// Non-GCP path: look for secret reference in status.clusterSecretName
 		secretName, found, err := unstructured.NestedString(obj.Object, "status", "clusterSecretName")
 		if err != nil {
 			log.Printf("Error fetching secret name for config [%s]: %v", c, err)
