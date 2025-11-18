@@ -123,7 +123,7 @@ var setupCmd = &cobra.Command{
 				Name:      "skycluster-kubeconfig",
 				Labels: map[string]string{
 					"skycluster.io/managed-by":  "skycluster",
-					"skycluster.io/secret-type": "skycluster-kubeconfig",
+					"skycluster.io/secret-type": "k8s-connection-data",
 					"skycluster.io/cluster-name": "skycluster-management",
 				},
 			},
