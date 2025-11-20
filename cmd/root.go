@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"os"
 
+	cl "github.com/etesami/skycluster-cli/cmd/cleanup"
+	pp "github.com/etesami/skycluster-cli/cmd/profile"
+	st "github.com/etesami/skycluster-cli/cmd/setup"
 	sub "github.com/etesami/skycluster-cli/cmd/subnet"
 	sv "github.com/etesami/skycluster-cli/cmd/xinstance"
 	ks "github.com/etesami/skycluster-cli/cmd/xkube"
 	sp "github.com/etesami/skycluster-cli/cmd/xprovider"
-	st "github.com/etesami/skycluster-cli/cmd/setup"
-	cl "github.com/etesami/skycluster-cli/cmd/cleanup"
 
 	homedir "github.com/mitchellh/go-homedir"
 	"github.com/spf13/cobra"
@@ -41,7 +42,9 @@ func init() {
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	// rootCmd.AddCommand(dp.GetDependencyCmd())
 	// rootCmd.AddCommand(ovl.GetOverlayCmd())
+
 	rootCmd.AddCommand(st.GetSetupCmd())
+	rootCmd.AddCommand(pp.GetProfileCmd())
 	rootCmd.AddCommand(sp.GetXProviderCmd())
 	rootCmd.AddCommand(sv.GetXInstanceCmd())
 	rootCmd.AddCommand(ks.GetXKubeCmd())
