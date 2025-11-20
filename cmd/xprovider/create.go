@@ -1,8 +1,9 @@
-package profile
+package xprovider
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -30,25 +31,24 @@ var (
 
 func init() {
 	// Cobra flags for this command
-	profileCreateCmd.Flags().StringVarP(&specFile, "spec-file", "f", "", "Path to YAML file containing the Profile spec (required)")
-	profileCreateCmd.Flags().StringVarP(&resourceName, "name", "n", "", "Name of the Profile resource to create/update")
+	createCmd.Flags().StringVar(&specFile, "spec-file", "", "Path to YAML file containing the XProvider spec (required)")
+	createCmd.Flags().StringVar(&resourceName, "name", "example-xprovider", "Name of the XProvider resource to create/update")
 
 	// allow classic flag package parsing for compatibility with `go run` / tests
 	_ = flag.CommandLine.Parse([]string{})
 }
 
-var profileCreateCmd = &cobra.Command{
+var createCmd = &cobra.Command{
 	Use:   "create",
-	Short: "Create or update a Profile resource from a YAML spec",
-	Run: func(cmd *cobra.Command, args []string) {
-		ns := "skycluster-system"
+	Short: "Create or update an XProvider resource from a YAML spec",
+	RunE: func(cmd *cobra.Command, args []string) error {
 		if strings.TrimSpace(specFile) == "" {
-			_ = fmt.Errorf("flag --spec-file is required")
+			return errors.New("flag --spec-file is required")
 		}
 		// Read spec file
 		raw, err := os.ReadFile(expandPath(specFile))
 		if err != nil {
-			_ = fmt.Errorf("read spec file: %w", err)
+			return fmt.Errorf("read spec file: %w", err)
 		}
 
 		// Parse YAML into generic map (we expect the YAML to describe the spec fields,
@@ -56,22 +56,21 @@ var profileCreateCmd = &cobra.Command{
 		// Convert YAML -> JSON -> map[string]interface{} for safe decoding.
 		jsonBytes, err := yaml.YAMLToJSON(raw)
 		if err != nil {
-			_ = fmt.Errorf("convert yaml to json: %w", err)
+			return fmt.Errorf("convert yaml to json: %w", err)
 		}
 
 		var specMap map[string]interface{}
 		if err := json.Unmarshal(jsonBytes, &specMap); err != nil {
-			_ = fmt.Errorf("unmarshal spec json: %w", err)
+			return fmt.Errorf("unmarshal spec json: %w", err)
 		}
 
-		// Build unstructured Profile object
+		// Build unstructured XProvider object
 		u := &unstructured.Unstructured{
 			Object: map[string]interface{}{
-				"apiVersion": "core.skycluster.io/v1alpha1",
-				"kind":       "ProviderProfile",
+				"apiVersion": "skycluster.io/v1alpha1",
+				"kind":       "XProvider",
 				"metadata": map[string]interface{}{
 					"name": resourceName,
-					"namespace": ns,
 				},
 				"spec": specMap,
 			},
@@ -85,29 +84,41 @@ var profileCreateCmd = &cobra.Command{
 		}
 		dyn, err := utils.GetDynamicClient(kubeconfigPath)
 		if err != nil {
-			_ = fmt.Errorf("build dynamic client: %w", err)
+			return fmt.Errorf("build dynamic client: %w", err)
 		}
 
-		if err := createOrUpdateProfile(cmd.Context(), dyn, u, ns); err != nil {
-			_ = fmt.Errorf("create/update Profile %s: %w", u.GetName(), err)
+		if err := createOrUpdateXProvider(cmd.Context(), dyn, u); err != nil {
+			return fmt.Errorf("create/update XProvider %s: %w", u.GetName(), err)
 		}
 
-		fmt.Fprintf(os.Stdout, "ProviderProfile %s ensured successfully\n", u.GetName())
+		fmt.Fprintf(os.Stdout, "XProvider %s ensured successfully\n", u.GetName())
+		return nil
 	},
 }
 
+func GetCreateXProviderCmd() *cobra.Command { return createCmd }
 
-// createOrUpdateProfile will create the resource if not present, otherwise merge and update.
+// createOrUpdateXProvider will create the resource if not present, otherwise merge and update.
 // It handles both namespaced and cluster-scoped resources based on u.GetNamespace() presence.
-func createOrUpdateProfile(ctx context.Context, dyn dynamic.Interface, u *unstructured.Unstructured, ns string) error {
+func createOrUpdateXProvider(ctx context.Context, dyn dynamic.Interface, u *unstructured.Unstructured) error {
 	gvr := schema.GroupVersionResource{
-		Group:    "core.skycluster.io",
+		Group:    "skycluster.io",
 		Version:  "v1alpha1",
-		Resource: "providerprofiles",
+		Resource: "xproviders",
 	}
 
 	name := u.GetName()
-	getter := dyn.Resource(gvr).Namespace(ns)
+	ns := u.GetNamespace()
+
+	var (
+		getter dynamic.ResourceInterface
+	)
+
+	if ns == "" {
+		getter = dyn.Resource(gvr)
+	} else {
+		getter = dyn.Resource(gvr).Namespace(ns)
+	}
 
 	existing, err := getter.Get(ctx, name, metav1.GetOptions{})
 	if err != nil {

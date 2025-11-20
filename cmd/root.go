@@ -38,7 +38,7 @@ func Execute() {
 func init() {
 	cobra.OnInitialize(initConfig)
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file")
-	rootCmd.PersistentFlags().StringVarP(&ns, "namespace", "n", "", "namespace")
+	rootCmd.PersistentFlags().StringVar(&ns, "namespace", "", "namespace")
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	// rootCmd.AddCommand(dp.GetDependencyCmd())
 	// rootCmd.AddCommand(ovl.GetOverlayCmd())
