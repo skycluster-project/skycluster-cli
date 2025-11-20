@@ -6,6 +6,7 @@ import (
 
 func init() {
 	xProviderCmd.AddCommand(xProviderListCmd)
+	xProviderCmd.AddCommand(xProviderCreateCmd)
 	xProviderCmd.AddCommand(xProviderDeleteCmd)
 }
 

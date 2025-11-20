@@ -5,10 +5,11 @@ import (
 )
 
 func init() {
-	xInstanceCmd.AddCommand(xInstnaceListCmd)
 	// xInstanceCmd.AddCommand(flavor.GetFlavorCmd())
 	// xInstanceCmd.AddCommand(image.GetImageCmd())
-	// xInstanceCmd.AddCommand(xInstanceDeleteCmd)
+	xInstanceCmd.AddCommand(xInstanceListCmd)
+	xInstanceCmd.AddCommand(xInstanceCreateCmd)
+	xInstanceCmd.AddCommand(xInstanceDeleteCmd)
 }
 
 var xInstanceCmd = &cobra.Command{

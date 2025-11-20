@@ -1,9 +1,8 @@
-package xprovider
+package xinstance
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -31,24 +30,24 @@ var (
 
 func init() {
 	// Cobra flags for this command
-	xProviderCreateCmd.Flags().StringVarP(&specFile, "spec-file", "f", "", "Path to YAML file containing the XProvider spec (required)")
-	xProviderCreateCmd.Flags().StringVarP(&resourceName, "name", "n", "", "Name of the XProvider resource to create/update")
+	xInstanceCreateCmd.Flags().StringVarP(&specFile, "spec-file", "f", "", "Path to YAML file containing the XInstance spec (required)")
+	xInstanceCreateCmd.Flags().StringVarP(&resourceName, "name", "n", "", "Name of the XInstance resource to create/update")
 
 	// allow classic flag package parsing for compatibility with `go run` / tests
 	_ = flag.CommandLine.Parse([]string{})
 }
 
-var xProviderCreateCmd = &cobra.Command{
+var xInstanceCreateCmd = &cobra.Command{
 	Use:   "create",
-	Short: "Create or update an XProvider resource from a YAML spec",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	Short: "Create or update an XInstance resource from a YAML spec",
+	Run: func(cmd *cobra.Command, args []string) {
 		if strings.TrimSpace(specFile) == "" {
-			return errors.New("flag --spec-file is required")
+			_ = fmt.Errorf("flag --spec-file is required")
 		}
 		// Read spec file
 		raw, err := os.ReadFile(expandPath(specFile))
 		if err != nil {
-			return fmt.Errorf("read spec file: %w", err)
+			_ = fmt.Errorf("read spec file: %w", err)
 		}
 
 		// Parse YAML into generic map (we expect the YAML to describe the spec fields,
@@ -56,19 +55,19 @@ var xProviderCreateCmd = &cobra.Command{
 		// Convert YAML -> JSON -> map[string]interface{} for safe decoding.
 		jsonBytes, err := yaml.YAMLToJSON(raw)
 		if err != nil {
-			return fmt.Errorf("convert yaml to json: %w", err)
+			_ = fmt.Errorf("convert yaml to json: %w", err)
 		}
 
 		var specMap map[string]interface{}
 		if err := json.Unmarshal(jsonBytes, &specMap); err != nil {
-			return fmt.Errorf("unmarshal spec json: %w", err)
+			_ = fmt.Errorf("unmarshal spec json: %w", err)
 		}
 
-		// Build unstructured XProvider object
+		// Build unstructured XInstance object
 		u := &unstructured.Unstructured{
 			Object: map[string]interface{}{
 				"apiVersion": "skycluster.io/v1alpha1",
-				"kind":       "XProvider",
+				"kind":       "XInstance",
 				"metadata": map[string]interface{}{
 					"name": resourceName,
 				},
@@ -84,34 +83,31 @@ var xProviderCreateCmd = &cobra.Command{
 		}
 		dyn, err := utils.GetDynamicClient(kubeconfigPath)
 		if err != nil {
-			return fmt.Errorf("build dynamic client: %w", err)
+			_ = fmt.Errorf("build dynamic client: %w", err)
 		}
 
-		if err := createOrUpdateXProvider(cmd.Context(), dyn, u); err != nil {
-			return fmt.Errorf("create/update XProvider %s: %w", u.GetName(), err)
+		if err := createOrUpdateXInstance(cmd.Context(), dyn, u); err != nil {
+			_ = fmt.Errorf("create/update XInstance %s: %w", u.GetName(), err)
 		}
 
-		fmt.Fprintf(os.Stdout, "XProvider %s ensured successfully\n", u.GetName())
-		return nil
+		fmt.Fprintf(os.Stdout, "XInstance %s ensured successfully\n", u.GetName())
 	},
 }
 
-// createOrUpdateXProvider will create the resource if not present, otherwise merge and update.
+// createOrUpdateXInstance will create the resource if not present, otherwise merge and update.
 // It handles both namespaced and cluster-scoped resources based on u.GetNamespace() presence.
-func createOrUpdateXProvider(ctx context.Context, dyn dynamic.Interface, u *unstructured.Unstructured) error {
+func createOrUpdateXInstance(ctx context.Context, dyn dynamic.Interface, u *unstructured.Unstructured) error {
 	gvr := schema.GroupVersionResource{
 		Group:    "skycluster.io",
 		Version:  "v1alpha1",
-		Resource: "xproviders",
+		// As requested: plural "xinstances"
+		Resource: "xinstances",
 	}
 
 	name := u.GetName()
-	ns := u.GetNamespace()
+	ns := ""
 
-	var (
-		getter dynamic.ResourceInterface
-	)
-
+	var getter dynamic.ResourceInterface
 	if ns == "" {
 		getter = dyn.Resource(gvr)
 	} else {
@@ -124,17 +120,11 @@ func createOrUpdateXProvider(ctx context.Context, dyn dynamic.Interface, u *unst
 			_, err := getter.Create(ctx, u, metav1.CreateOptions{})
 			return err
 		}
-		if err != nil {
-			return err
-		}
-
-		// many clients return a typed API error; use apierrors.IsNotFound when available.
-		// As we didn't import apierrors here (not strictly necessary), do a best-effort create on any error that mentions "not found".
+		// Some clients may return a typed API error; attempt best-effort create on "not found" text.
 		if strings.Contains(err.Error(), "not found") {
 			_, err := getter.Create(ctx, u, metav1.CreateOptions{})
 			return err
 		}
-		// Otherwise return error
 		return err
 	}
 

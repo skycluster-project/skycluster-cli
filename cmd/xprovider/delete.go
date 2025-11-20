@@ -23,18 +23,14 @@ import (
 var pNames []string
 
 func init() {
-	xProviderDeleteCmd.PersistentFlags().StringSliceVarP(&pNames, "provider-name", "p", nil, "Provider Names, seperated by comma")
+	xProviderDeleteCmd.PersistentFlags().StringSliceVarP(&pNames, "provider-name", "n", nil, "Provider Names, separated by comma")
 }
 
 var xProviderDeleteCmd = &cobra.Command{
 	Use:   "delete",
 	Short: "Delete XProviders",
 	Run: func(cmd *cobra.Command, args []string) {
-		ns, err := cmd.Root().PersistentFlags().GetString("namespace")
-		if err != nil {
-			log.Fatalf("error getting namespace: %v", err)
-			return
-		}
+		ns := ""
 		if len(pNames) > 0 {
 			listXProvidersByProviderNamesAndConfirm(ns, pNames)
 			return
@@ -52,9 +48,7 @@ func listXProvidersByProviderNamesAndConfirm(ns string, pNames []string) {
 	}
 
 	providerList := make([]*unstructured.Unstructured, 0)
-	// baseFilters := "skycluster.io/managed-by=skycluster"
 	for _, n := range pNames {
-		// filters := baseFilters + ", skycluster.io/provider-name=" + n
 		filteredProviders := getProviderData(dynamicClient, ns, n)
 		providerList = append(providerList, filteredProviders)
 	}
@@ -81,12 +75,12 @@ func getProviderData(dynamicClient dynamic.Interface, ns string, name string) *u
 func confirmDeletion(dynamicClient dynamic.Interface, ns string, providerList []*unstructured.Unstructured) {
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 4, ' ', 0)
 	if len(providerList) == 0 {
-		fmt.Printf("No SkyProvider found in the namespace [%s]\n", ns)
+		fmt.Printf("No SkyProvider found.\n")
 		return
 	} else {
-		fmt.Fprintln(writer, "NAME\tNAME\tNAMESPACE")
+		fmt.Fprintln(writer, "NAME")
 		for _, resource := range providerList {
-			fmt.Fprintf(writer, "%s\t%s\n", resource.GetName(), resource.GetNamespace())
+			fmt.Fprintf(writer, "%s\n", resource.GetName())
 		}
 		writer.Flush()
 
@@ -111,7 +105,7 @@ func deleteXProviders(dynamicClient dynamic.Interface, ns string, items []*unstr
 		err := dynamicClient.Resource(schema.GroupVersionResource{
 			Group:    "skycluster.io",
 			Version:  "v1alpha1",
-			Resource: "XProviders",
+			Resource: "xproviders",
 		}).Namespace(ns).Delete(context.Background(), resource.GetName(), metav1.DeleteOptions{})
 		if err != nil {
 			log.Fatalf("Error deleting resource: %v", err)
