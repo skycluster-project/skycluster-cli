@@ -44,7 +44,7 @@ help:
 	@echo ""
 	@echo "Vars you can override: APP, MAIN, OUTDIR, CGO_ENABLED, LDFLAGS, PLATFORMS"
 	@echo "Examples:"
-	@echo "  make build-one OS=linux ARCH=arm64"
+	@echo "  make build-one OS=linux ARCH=amd64"
 	@echo "  make LDFLAGS=\"-s -w -X 'example.com/project/buildinfo.Version=v1.2.3'\" build"
 
 # Native build (host OS/ARCH)

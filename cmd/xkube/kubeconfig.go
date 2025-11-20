@@ -351,8 +351,8 @@ func ensureStaticKubeconfig(kubeconfigBytes []byte, clusterID string, targetName
 
 	// choose unique names to avoid collision when merging multiple
 	clusterOutName := clusterID + "-" + clusterRef + "-cluster"
-	userOutName := clusterID + "-static-user"
-	contextOutName := clusterID + "-static-context"
+	userOutName := clusterID 
+	contextOutName := clusterID
 
 	newCfg.Clusters[clusterOutName] = &api.Cluster{
 		Server:                   clusterObj.Server,

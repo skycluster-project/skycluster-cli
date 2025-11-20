@@ -143,17 +143,13 @@ var setupCmd = &cobra.Command{
 		ctx := context.Background()
 
 		// Ensure namespace exists (best effort; ignore AlreadyExists)
-		_, err = clientset.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			_, err = clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{Name: ns},
-			}, metav1.CreateOptions{})
-			if err != nil {
-				return fmt.Errorf("create namespace %s: %w", ns, err)
-			}
-		} else if err != nil {
-			return fmt.Errorf("check namespace %s: %w", ns, err)
+		if err := createOrUpdateNamespace(ctx, clientset, ns); err != nil {
+			return fmt.Errorf("ensure namespace %s: %w", ns, err)
 		}
+		if err := createOrUpdateNamespace(ctx, clientset, "submariner-operator"); err != nil {
+			return fmt.Errorf("ensure namespace %s: %w", "submariner-operator", err)
+		}
+
 
 		if err := createOrUpdateSecret(ctx, clientset, secret1); err != nil {
 			return fmt.Errorf("create/update secret %s: %w", secret1.Name, err)
@@ -203,6 +199,21 @@ func createOrUpdateSecret(ctx context.Context, c *kubernetes.Clientset, s *corev
 	return err
 }
 
+func createOrUpdateNamespace(ctx context.Context, c *kubernetes.Clientset, ns string) error {
+	_, err := c.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			_, err = c.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: ns},
+			}, metav1.CreateOptions{})
+			if err != nil {
+				return fmt.Errorf("create namespace %s: %w", ns, err)
+			}
+		} else if err != nil {
+			return fmt.Errorf("check namespace %s: %w", ns, err)
+		}
+	return nil
+}
+
 // buildXSetupUnstructured builds an unstructured.Unstructured representing the XSetup CR shown:
 // apiVersion: skycluster.io/v1alpha1
 // kind: XSetup
@@ -228,7 +239,6 @@ func buildXSetupUnstructured(name, apiServer string, submarinerEnabled bool) *un
 	return u
 }
 
-// createOrUpdateXSetup creates or updates the XSetup custom resource (cluster scoped).
 func createOrUpdateXSetup(ctx context.Context, dyn dynamic.Interface, u *unstructured.Unstructured) error {
 	gvr := schema.GroupVersionResource{
 		Group:    "skycluster.io",
@@ -248,18 +258,41 @@ func createOrUpdateXSetup(ctx context.Context, dyn dynamic.Interface, u *unstruc
 		return err
 	}
 
-	// Preserve resourceVersion for update
-	if existing != nil {
-		if rv := existing.GetResourceVersion(); rv != "" {
-			u.SetResourceVersion(rv)
-		}
-		// Optionally preserve other fields from existing if needed
+	// Merge existing and new objects: overlay u onto existing so unspecified fields are preserved.
+	merged := existing.DeepCopy()
+	merged.Object = mergeMaps(merged.Object, u.Object)
 
-		_, err = dyn.Resource(gvr).Update(ctx, u, metav1.UpdateOptions{})
-		return err
+	_, err = dyn.Resource(gvr).Update(ctx, merged, metav1.UpdateOptions{})
+	return err
+}
+
+// mergeMaps overlays src onto dst recursively. For keys where both dst and src are maps,
+// the merge is performed recursively. Other values from src overwrite dst. dst is mutated
+// and returned as the resulting map.
+func mergeMaps(dst, src map[string]interface{}) map[string]interface{} {
+	if dst == nil {
+		dst = make(map[string]interface{})
 	}
-
-	return nil
+	for k, sv := range src {
+		if sv == nil {
+			// skip nil values in src (do not delete existing)
+			continue
+		}
+		if svMap, ok := sv.(map[string]interface{}); ok {
+			if dv, exists := dst[k]; exists {
+				if dvMap, ok2 := dv.(map[string]interface{}); ok2 {
+					dst[k] = mergeMaps(dvMap, svMap)
+					continue
+				}
+			}
+			// dst doesn't have a map for this key, create a new merged map
+			dst[k] = mergeMaps(make(map[string]interface{}), svMap)
+			continue
+		}
+		// For non-map types (including slices), src overwrites dst
+		dst[k] = sv
+	}
+	return dst
 }
 
 // validateAndCheckAPIServer validates the apiServer string and checks reachability and basic Kubernetes API validity.
