@@ -8,6 +8,7 @@ func init() {
 	xProviderCmd.AddCommand(xProviderListCmd)
 	xProviderCmd.AddCommand(xProviderCreateCmd)
 	xProviderCmd.AddCommand(xProviderDeleteCmd)
+	xProviderCmd.AddCommand(xProviderSSHCmd)
 }
 
 var xProviderCmd = &cobra.Command{
