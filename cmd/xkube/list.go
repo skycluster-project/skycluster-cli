@@ -115,7 +115,7 @@ func listXKubes(ns string) {
 
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 4, ' ', 0)
 	if len(resources.Items) == 0 {
-		fmt.Printf("No XKube found in the namespace [%s]\n", ns)
+		fmt.Printf("No XKube found.\n", ns)
 		return
 		} else {
 		fmt.Fprintln(writer, "NAME\tPLATFORM\tPOD_CIDR\tSERVICE_CIDR\tLOCATION\tEXTERNAL_NAME")

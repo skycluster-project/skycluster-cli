@@ -5,6 +5,8 @@ import (
 )
 
 func init() {
+	xKubeCmd.AddCommand(xKubeCreateCmd)
+	xKubeCmd.AddCommand(xKubeDeleteCmd)
 	xKubeCmd.AddCommand(xKubeListCmd)
 	xKubeCmd.AddCommand(configShowCmd)
 }
