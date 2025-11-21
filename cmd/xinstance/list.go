@@ -66,7 +66,7 @@ func watchXInstances(ns string) {
 	}
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 4, ' ', 0)
 	// Removed CIDR_BLOCK, added SYNC and READY columns
-	fmt.Fprintln(writer, "NAME\tPRIVATE_IP\tPUBLIC_IP\tSPOT\tSYNC\tREADY")
+	fmt.Fprintln(writer, "NAME\tPROVIDER\tPRIVATE_IP\tPUBLIC_IP\tSPOT\tSYNC\tREADY")
 
 	watcher, err := dynamicClient.Resource(gvr).Namespace(ns).Watch(context.Background(), metav1.ListOptions{})
 	//	LabelSelector: "skycluster.io/managed-by=skycluster",
@@ -76,7 +76,7 @@ func watchXInstances(ns string) {
 	}
 	ch := watcher.ResultChan()
 	for event := range ch {
-		privateIp, publicIp, spot := "-", "-", "-"
+		privateIp, publicIp, providerName, spot := "-", "-", "", "-"
 		obj := event.Object.(*unstructured.Unstructured)
 
 		// New status layout: status.network.privateIp / status.network.publicIp
@@ -85,6 +85,9 @@ func watchXInstances(ns string) {
 		}
 		if v, found, _ := unstructured.NestedString(obj.Object, "status", "network", "publicIp"); found {
 			publicIp = v
+		}
+		if v, found, _ := unstructured.NestedString(obj.Object, "status", "providerName"); found {
+			providerName = v
 		}
 		if v, found, _ := unstructured.NestedBool(obj.Object, "status", "spotInstance"); found {
 			s := fmt.Sprintf("%v", v)
@@ -101,7 +104,7 @@ func watchXInstances(ns string) {
 		}
 		readyStatus := getConditionStatus(obj, "Ready")
 
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n", obj.GetName(), privateIp, publicIp, spot, syncStatus, readyStatus)
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", obj.GetName(), providerName, privateIp, publicIp, spot, syncStatus, readyStatus)
 		writer.Flush()
 	}
 }
@@ -132,16 +135,19 @@ func listXInstances(ns string) {
 		return
 	} else {
 		// Removed CIDR_BLOCK, added SYNC and READY columns
-		fmt.Fprintln(writer, "NAME\tPRIVATE_IP\tPUBLIC_IP\tSPOT\tSYNC\tREADY")
+		fmt.Fprintln(writer, "NAME\tPROVIDER\tPRIVATE_IP\tPUBLIC_IP\tSPOT\tSYNC\tREADY")
 	}
 
 	for _, resource := range resources.Items {
-		privateIp, publicIp, spot := "-", "-", "-"
+		privateIp, publicIp, providerName, spot := "-", "-", "", "-"
 		if v, found, _ := unstructured.NestedString(resource.Object, "status", "network", "privateIp"); found {
 			privateIp = v
 		}
 		if v, found, _ := unstructured.NestedString(resource.Object, "status", "network", "publicIp"); found {
 			publicIp = v
+		}
+		if v, found, _ := unstructured.NestedString(resource.Object, "status", "providerName"); found {
+			providerName = v
 		}
 		if v, found, _ := unstructured.NestedBool(resource.Object, "status", "spotInstance"); found {
 			s := fmt.Sprintf("%v", v)
@@ -157,7 +163,7 @@ func listXInstances(ns string) {
 		}
 		readyStatus := getConditionStatus(&resource, "Ready")
 
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n", resource.GetName(), privateIp, publicIp, spot, syncStatus, readyStatus)
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", resource.GetName(), providerName, privateIp, publicIp, spot, syncStatus, readyStatus)
 	}
 	writer.Flush()
 }
