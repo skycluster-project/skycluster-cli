@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/etesami/skycluster-cli/internal/utils"
@@ -34,6 +35,22 @@ var xInstanceListCmd = &cobra.Command{
 	},
 }
 
+// helper to extract a condition's "status" (e.g. "True"/"False"/"Unknown")
+func getConditionStatus(obj *unstructured.Unstructured, condType string) string {
+	if arr, found, _ := unstructured.NestedSlice(obj.Object, "status", "conditions"); found {
+		for _, item := range arr {
+			if m, ok := item.(map[string]interface{}); ok {
+				if t, ok := m["type"].(string); ok && t == condType {
+					if s, ok := m["status"].(string); ok {
+						return s
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func watchXInstances(ns string) {
 	kubeconfig := viper.GetString("kubeconfig")
 	dynamicClient, err := utils.GetDynamicClient(kubeconfig)
@@ -48,17 +65,18 @@ func watchXInstances(ns string) {
 		Resource: "xinstances",
 	}
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 4, ' ', 0)
-	fmt.Fprintln(writer, "NAME\tPRIVATE_IP\tPUBLIC_IP\tCIDR_BLOCK")
+	// Removed CIDR_BLOCK, added SYNC and READY columns
+	fmt.Fprintln(writer, "NAME\tPRIVATE_IP\tPUBLIC_IP\tSPOT\tSYNC\tREADY")
 
 	watcher, err := dynamicClient.Resource(gvr).Namespace(ns).Watch(context.Background(), metav1.ListOptions{})
-	// 	LabelSelector: "skycluster.io/managed-by=skycluster",
+	//	LabelSelector: "skycluster.io/managed-by=skycluster",
 	if err != nil {
 		fmt.Printf("Error setting up watch: %v\n", err)
 		return
 	}
 	ch := watcher.ResultChan()
 	for event := range ch {
-		privateIp, publicIp, vpcCidr := "", "", ""
+		privateIp, publicIp, spot := "-", "-", "-"
 		obj := event.Object.(*unstructured.Unstructured)
 
 		// New status layout: status.network.privateIp / status.network.publicIp
@@ -68,12 +86,22 @@ func watchXInstances(ns string) {
 		if v, found, _ := unstructured.NestedString(obj.Object, "status", "network", "publicIp"); found {
 			publicIp = v
 		}
-
-		if v, found, _ := unstructured.NestedString(obj.Object, "spec", "vpcCidr"); found {
-			vpcCidr = v
+		if v, found, _ := unstructured.NestedBool(obj.Object, "status", "spotInstance"); found {
+			s := fmt.Sprintf("%v", v)
+			if len(s) > 0 { 
+				spot = strings.ToUpper(s[:1]) + s[1:] 
+			} else { spot = s }
 		}
 
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", obj.GetName(), privateIp, publicIp, vpcCidr)
+		// Conditions: get Sync (Synced) and Ready condition statuses
+		syncStatus := getConditionStatus(obj, "Synced") // example uses "Synced"
+		if syncStatus == "" {
+			// fallback to "Sync" type if resource uses that name
+			syncStatus = getConditionStatus(obj, "Sync")
+		}
+		readyStatus := getConditionStatus(obj, "Ready")
+
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n", obj.GetName(), privateIp, publicIp, spot, syncStatus, readyStatus)
 		writer.Flush()
 	}
 }
@@ -103,21 +131,33 @@ func listXInstances(ns string) {
 		fmt.Printf("No XInstances found.\n")
 		return
 	} else {
-		fmt.Fprintln(writer, "NAME\tPRIVATE_IP\tPUBLIC_IP\tCIDR_BLOCK")
+		// Removed CIDR_BLOCK, added SYNC and READY columns
+		fmt.Fprintln(writer, "NAME\tPRIVATE_IP\tPUBLIC_IP\tSPOT\tSYNC\tREADY")
 	}
 
 	for _, resource := range resources.Items {
-		privateIp, publicIp := "", ""
+		privateIp, publicIp, spot := "-", "-", "-"
 		if v, found, _ := unstructured.NestedString(resource.Object, "status", "network", "privateIp"); found {
 			privateIp = v
 		}
 		if v, found, _ := unstructured.NestedString(resource.Object, "status", "network", "publicIp"); found {
 			publicIp = v
 		}
+		if v, found, _ := unstructured.NestedBool(resource.Object, "status", "spotInstance"); found {
+			s := fmt.Sprintf("%v", v)
+			if len(s) > 0 { 
+				spot = strings.ToUpper(s[:1]) + s[1:] 
+			} else { spot = s }
+		}
 
-		vpc, _, _ := unstructured.NestedString(resource.Object, "spec", "vpcCidr")
+		// Conditions: get Sync (Synced) and Ready condition statuses
+		syncStatus := getConditionStatus(&resource, "Synced")
+		if syncStatus == "" {
+			syncStatus = getConditionStatus(&resource, "Sync")
+		}
+		readyStatus := getConditionStatus(&resource, "Ready")
 
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", resource.GetName(), privateIp, publicIp, vpc)
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n", resource.GetName(), privateIp, publicIp, spot, syncStatus, readyStatus)
 	}
 	writer.Flush()
 }
