@@ -7,8 +7,6 @@ import (
 	"os"
 	"text/tabwriter"
 
-	lo "github.com/samber/lo"
-
 	"github.com/etesami/skycluster-cli/internal/utils"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -55,7 +53,7 @@ func watchXKubes(ns string) {
 		Resource: "xkubes",
 	}
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 4, ' ', 0)
-	fmt.Fprintln(writer, "NAME\tPRIVATE_IP\tPUBLIC_IP\tCIDR_BLOCK")
+	fmt.Fprintln(writer, "NAME\tPLATFORM\tPOD_CIDR\tSERVICE_CIDR\tLOCATION\tEXTERNAL_NAME,\tREADY")
 
 	watcher, err := dynamicClient.Resource(gvr).Namespace(ns).Watch(context.Background(), metav1.ListOptions{})
 	// 	LabelSelector: "skycluster.io/managed-by=skycluster",
@@ -65,23 +63,18 @@ func watchXKubes(ns string) {
 	}
 	ch := watcher.ResultChan()
 	for event := range ch {
-		privateIp, publicIp, vpcCidr := "", "", ""
 		obj := event.Object.(*unstructured.Unstructured)
 		
-		stat, found, err := unstructured.NestedStringMap(obj.Object, "status", "gateway")
-		if err == nil && found {
-			privIp, ok := stat["privateIp"]
-			privateIp = lo.Ternary(ok, privIp, "")
-			pubIp, ok := stat["publicIp"]
-			publicIp = lo.Ternary(ok, pubIp, "")
-		}
+		podCidr, _, _ := unstructured.NestedString(obj.Object, "status", "podCidr")
+		svcCidr, _, _ := unstructured.NestedString(obj.Object, "status", "serviceCidr")
+		provPlatform, _, _ := unstructured.NestedString(obj.Object, "spec", "providerRef", "platform")
+		provCfgZones, _, _ := unstructured.NestedStringMap(obj.Object, "spec", "providerRef", "zones")
+		extName, _, _ := unstructured.NestedString(obj.Object, "status", "externalClusterName")
 
-		vpc, found, err := unstructured.NestedString(obj.Object, "spec", "vpcCidr")
-		if err == nil && found {
-			vpcCidr = vpc
-		}
+		// Conditions: get Sync (Synced) and Ready condition statuses
+		readyStatus := utils.GetConditionStatus(obj, "Ready")
 
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", obj.GetName(), privateIp, publicIp, vpcCidr)
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", obj.GetName(), provPlatform, podCidr, svcCidr, provCfgZones["primary"], extName, readyStatus)
 		writer.Flush()
 	}
 }
@@ -118,30 +111,20 @@ func listXKubes(ns string) {
 		fmt.Printf("No XKube found.\n", ns)
 		return
 		} else {
-		fmt.Fprintln(writer, "NAME\tPLATFORM\tPOD_CIDR\tSERVICE_CIDR\tLOCATION\tEXTERNAL_NAME")
+		fmt.Fprintln(writer, "NAME\tPLATFORM\tPOD_CIDR\tSERVICE_CIDR\tLOCATION\tEXTERNAL_NAME,\tREADY")
 	}
 
 	for _, resource := range resources.Items {
 		podCidr, _, _ := unstructured.NestedString(resource.Object, "status", "podCidr")
 		svcCidr, _, _ := unstructured.NestedString(resource.Object, "status", "serviceCidr")
-		// agents, _, _ := unstructured.NestedSlice(resource.Object, "status", "agents")
 		provPlatform, _, _ := unstructured.NestedString(resource.Object, "spec", "providerRef", "platform")
-		// ctrls, _, _ := unstructured.NestedSlice(resource.Object, "status", "controllers")
 		provCfgZones, _, _ := unstructured.NestedStringMap(resource.Object, "spec", "providerRef", "zones")
 		extName, _, _ := unstructured.NestedString(resource.Object, "status", "externalClusterName")
-		// ctrlIp := ""
-		// for _, c := range ctrls {
-		// 	m, ok := c.(map[string]interface{})
-		// 	if ok {
-		// 		ctrlIp, ok = m["publicIp"].(string)
-		// 		if !ok {
-		// 			ctrlIp = ""
-		// 		}
-		// 		break // only one controller is expected
-		// 	}
-		// }
 
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n", resource.GetName(), provPlatform, podCidr, svcCidr, provCfgZones["primary"], extName)
+		// Conditions: get Sync (Synced) and Ready condition statuses
+		readyStatus := utils.GetConditionStatus(&resource, "Ready")
+
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", resource.GetName(), provPlatform, podCidr, svcCidr, provCfgZones["primary"], extName, readyStatus)
 	}
 	writer.Flush()
 }

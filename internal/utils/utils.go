@@ -5,8 +5,24 @@ import (
 	"fmt"
 	"log"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/spf13/viper"
 )
+
+// helper to extract a condition's "status" (e.g. "True"/"False"/"Unknown")
+func GetConditionStatus(obj *unstructured.Unstructured, condType string) string {
+	if arr, found, _ := unstructured.NestedSlice(obj.Object, "status", "conditions"); found {
+		for _, item := range arr {
+			if m, ok := item.(map[string]interface{}); ok {
+				if t, ok := m["type"].(string); ok && t == condType {
+					if s, ok := m["status"].(string); ok {return s}
+				}
+			}
+		}
+	}
+	return ""
+}
 
 func IntersectionOfMapValues(m map[string][]string, keys []string) []string {
 	if len(m) == 0 {

@@ -35,22 +35,6 @@ var xInstanceListCmd = &cobra.Command{
 	},
 }
 
-// helper to extract a condition's "status" (e.g. "True"/"False"/"Unknown")
-func getConditionStatus(obj *unstructured.Unstructured, condType string) string {
-	if arr, found, _ := unstructured.NestedSlice(obj.Object, "status", "conditions"); found {
-		for _, item := range arr {
-			if m, ok := item.(map[string]interface{}); ok {
-				if t, ok := m["type"].(string); ok && t == condType {
-					if s, ok := m["status"].(string); ok {
-						return s
-					}
-				}
-			}
-		}
-	}
-	return ""
-}
-
 func watchXInstances(ns string) {
 	kubeconfig := viper.GetString("kubeconfig")
 	dynamicClient, err := utils.GetDynamicClient(kubeconfig)
@@ -97,12 +81,12 @@ func watchXInstances(ns string) {
 		}
 
 		// Conditions: get Sync (Synced) and Ready condition statuses
-		syncStatus := getConditionStatus(obj, "Synced") // example uses "Synced"
+		syncStatus := utils.GetConditionStatus(obj, "Synced") // example uses "Synced"
 		if syncStatus == "" {
 			// fallback to "Sync" type if resource uses that name
-			syncStatus = getConditionStatus(obj, "Sync")
+			syncStatus = utils.GetConditionStatus(obj, "Sync")
 		}
-		readyStatus := getConditionStatus(obj, "Ready")
+		readyStatus := utils.GetConditionStatus(obj, "Ready")
 
 		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", obj.GetName(), providerName, privateIp, publicIp, spot, syncStatus, readyStatus)
 		writer.Flush()
@@ -157,11 +141,11 @@ func listXInstances(ns string) {
 		}
 
 		// Conditions: get Sync (Synced) and Ready condition statuses
-		syncStatus := getConditionStatus(&resource, "Synced")
+		syncStatus := utils.GetConditionStatus(&resource, "Synced")
 		if syncStatus == "" {
-			syncStatus = getConditionStatus(&resource, "Sync")
+			syncStatus = utils.GetConditionStatus(&resource, "Sync")
 		}
-		readyStatus := getConditionStatus(&resource, "Ready")
+		readyStatus := utils.GetConditionStatus(&resource, "Ready")
 
 		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", resource.GetName(), providerName, privateIp, publicIp, spot, syncStatus, readyStatus)
 	}

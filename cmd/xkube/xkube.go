@@ -9,6 +9,7 @@ func init() {
 	xKubeCmd.AddCommand(xKubeDeleteCmd)
 	xKubeCmd.AddCommand(xKubeListCmd)
 	xKubeCmd.AddCommand(configShowCmd)
+	xKubeCmd.AddCommand(xkubeMeshCmd)
 }
 
 var xKubeCmd = &cobra.Command{
