@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -27,12 +26,10 @@ import (
 )
 
 var kubeNames []string
-var merge *bool
 var outPath string
 
 func init() {
 	configShowCmd.PersistentFlags().StringSliceVarP(&kubeNames, "xkube", "k", nil, "Kube Names, separated by comma")
-	merge = configShowCmd.PersistentFlags().BoolP("merge", "m", false, "Merge multiple kubeconfigs")
 	configShowCmd.PersistentFlags().StringVarP(&outPath, "out", "o", "", "Output file path (required)")
 	if err := configShowCmd.MarkPersistentFlagRequired("out"); err != nil {
 		log.Fatalf("failed to mark 'out' flag required: %v", err)
@@ -45,11 +42,11 @@ var configShowCmd = &cobra.Command{
 	Short: "Show current kubeconfig of the xkube (writes to file)",
 	Run: func(cmd *cobra.Command, args []string) {
 		ns, _ := cmd.Root().PersistentFlags().GetString("namespace")
-		showConfigs(kubeNames, ns)
+		showConfigs(kubeNames, ns, outPath)
 	},
 }
 
-func showConfigs(kubeNames []string, ns string) {
+func showConfigs(kubeNames []string, ns string, outPath string) {
 	kubeconfigPath := viper.GetString("kubeconfig")
 	dynamicClient, err := utils.GetDynamicClient(kubeconfigPath)
 	if err != nil {
@@ -57,133 +54,18 @@ func showConfigs(kubeNames []string, ns string) {
 		return
 	}
 
+	if len(kubeNames) == 0 {
+		kubeNames = listXKubesNames(ns)
+	}
+
 	var kubeconfigs []string
 	for _, c := range kubeNames {
-		gvr := schema.GroupVersionResource{Group: "skycluster.io", Version: "v1alpha1", Resource: "xkubes"}
-		var ri dynamic.ResourceInterface
-		if ns != "" {
-			ri = dynamicClient.Resource(gvr).Namespace(ns)
-		} else {
-			ri = dynamicClient.Resource(gvr)
-		}
-
-		obj, err := ri.Get(context.Background(), c, metav1.GetOptions{})
+		
+		staticKubeconfig, err := generateKubeconfig(c, dynamicClient, ns)
 		if err != nil {
-			log.Printf("Error fetching config [%s]: %v", c, err)
+			log.Printf("Error generating kubeconfig for [%s]: %v", c, err)
 			continue
 		}
-
-		// Determine platform from spec.providerRef.platform
-		platform, _, _ := unstructured.NestedString(obj.Object, "spec", "providerRef", "platform")
-
-		// If platform is gcp, use gcloud to obtain credentials (temporary kubeconfig)
-		if platform == "gcp" {
-			// Expect status.clusterName to exist for GKE clusters
-			clusterName, _, _ := unstructured.NestedString(obj.Object, "status", "externalClusterName")
-			if clusterName == "" {
-				log.Printf("GCP platform detected for [%s] but status.externalClusterName not present; skipping", c)
-				continue
-			}
-
-			// Extract location from spec.providerRef.zones.primary
-			provCfgZones, foundZones, err := unstructured.NestedStringMap(obj.Object, "spec", "providerRef", "zones")
-			if err != nil {
-				log.Printf("Error reading providerRef.zones for [%s]: %v", c, err)
-				continue
-			}
-			if !foundZones {
-				log.Printf("providerRef.zones not found for [%s]; cannot determine GKE location", c)
-				continue
-			}
-			location := provCfgZones["primary"]
-			if location == "" {
-				log.Printf("primary zone not set in providerRef.zones for [%s]; cannot determine GKE location", c)
-				continue
-			}
-
-			// Create a temporary kubeconfig file for gcloud to write into
-			tmpFile, err := os.CreateTemp("", "gke-kubeconfig-*")
-			if err != nil {
-				log.Fatalf("failed to create temporary kubeconfig file for [%s]: %v", c, err)
-			}
-			tmpName := tmpFile.Name()
-			if err := tmpFile.Close(); err != nil {
-				// not fatal, but log
-				log.Printf("warning: closing temp file %s: %v", tmpName, err)
-			}
-
-			// Run gcloud with KUBECONFIG env pointing to tmpName
-			// Using --zone; if your clusters are regional you may want to use --region instead.
-			gcCmd := exec.Command("gcloud", "container", "clusters", "get-credentials", clusterName, "--location", location)
-			gcCmd.Env = append(os.Environ(), "KUBECONFIG="+tmpName)
-			out, err := gcCmd.CombinedOutput()
-			if err != nil {
-				// Per your request, on gcloud errors we print and terminate.
-				log.Fatalf("gcloud failed to get credentials for cluster %s (location=%s): %v\nOutput: %s", clusterName, location, err, string(out))
-			}
-
-			kubeconfigBytes, err := os.ReadFile(tmpName)
-			// Attempt to remove temp file immediately after reading (ignore removal error)
-			_ = os.Remove(tmpName)
-			if err != nil {
-				log.Fatalf("failed to read kubeconfig written by gcloud for [%s]: %v", c, err)
-			}
-
-			staticKubeconfig, err := ensureStaticKubeconfig(kubeconfigBytes, c, "skycluster-system")
-			if err != nil {
-				log.Printf("Error creating static kubeconfig for [%s]: %v", c, err)
-				continue
-			}
-
-			kubeconfigs = append(kubeconfigs, staticKubeconfig)
-			continue
-		}
-
-		// Non-GCP path: look for secret reference in status.clusterSecretName
-		secretName, found, err := unstructured.NestedString(obj.Object, "status", "clusterSecretName")
-		if err != nil {
-			log.Printf("Error fetching secret name for config [%s]: %v", c, err)
-			continue
-		}
-		if !found {
-			log.Printf("Secret name not found for config [%s]", c)
-			continue
-		}
-
-		// Secrets for xkube objects with kubeconfig are stored in skycluster-system
-		skyclusterNamespace := "skycluster-system"
-
-		// Fetch referenced secret
-		gvr = schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
-		secret, err := dynamicClient.Resource(gvr).Namespace(skyclusterNamespace).
-			Get(context.Background(), secretName, metav1.GetOptions{})
-		if err != nil {
-			log.Printf("Error fetching secret [%s]: %v", secretName, err)
-			continue
-		}
-		// Process the secret as needed
-		kubeconfig_b64, found, err := unstructured.NestedString(secret.Object, "data", "kubeconfig")
-		if err != nil {
-			log.Printf("Error fetching secret data for config [%s]: %v", c, err)
-			continue
-		}
-		if !found {
-			log.Printf("Secret data not found for config [%s]", c)
-			continue
-		}
-		kubeconfigBytes, err := base64.StdEncoding.DecodeString(kubeconfig_b64)
-		if err != nil {
-			log.Printf("Error decoding kubeconfig for config [%s]: %v", c, err)
-			continue
-		}
-
-		// Create static credentials (ServiceAccount + ClusterRoleBinding + token secret) on the remote cluster
-		staticKubeconfig, err := ensureStaticKubeconfig(kubeconfigBytes, c, skyclusterNamespace)
-		if err != nil {
-			log.Printf("Error creating static kubeconfig for [%s]: %v", c, err)
-			continue
-		}
-
 		kubeconfigs = append(kubeconfigs, staticKubeconfig)
 	}
 
@@ -193,46 +75,137 @@ func showConfigs(kubeNames []string, ns string) {
 
 	// Prepare output bytes
 	var outBytes []byte
-	if *merge {
-		mergedConfig := api.NewConfig()
-		// Merge the kubeconfigs
-		for _, c := range kubeconfigs {
-			// Parse the kubeconfig
-			config, err := clientcmd.Load([]byte(c))
-			if err != nil {
-				log.Printf("Error parsing kubeconfig: %v", err)
-				continue
-			}
-			// Merge clusters, authinfos, and contexts
-			for name, cluster := range config.Clusters {
-				mergedConfig.Clusters[name] = cluster
-			}
-			for name, authInfo := range config.AuthInfos {
-				mergedConfig.AuthInfos[name] = authInfo
-			}
-			for name, ctx := range config.Contexts {
-				mergedConfig.Contexts[name] = ctx
-			}
-		}
-		// Write the merged kubeconfig
-		mergedKubeconfig, err := clientcmd.Write(*mergedConfig)
-		if err != nil {
-			log.Fatalf("Error writing merged kubeconfig: %v", err)
-			return
-		}
-		outBytes = mergedKubeconfig
-	} else {
-		joined := strings.Join(kubeconfigs, "\n---\n")
-		outBytes = []byte(joined)
+	mergedBytes, err := mergeKubeconfigs(kubeconfigs)
+	if err != nil {
+		log.Fatalf("Error merging kubeconfigs: %v", err)
 	}
+	outBytes = mergedBytes
 
-	// Write to the required output path (do not print to screen)
-	if err := os.WriteFile(outPath, outBytes, 0o600); err != nil {
-		log.Fatalf("Error writing kubeconfig to file %s: %v", outPath, err)
+	if outPath != "" {
+		// Write to the required output path (do not print to screen)
+		if err := os.WriteFile(outPath, outBytes, 0o600); err != nil {
+			log.Fatalf("Error writing kubeconfig to file %s: %v", outPath, err)
+		}
 	}
 
 	// Optionally, you can print a small success message to stderr (not stdout), or omit entirely.
 	fmt.Fprintf(os.Stderr, "Wrote kubeconfig to %s\n", outPath)
+}
+
+func generateKubeconfig(c string, dynamicClient dynamic.Interface, ns string) (string, error) {
+	gvr := schema.GroupVersionResource{Group: "skycluster.io", Version: "v1alpha1", Resource: "xkubes"}
+	var ri dynamic.ResourceInterface
+	if ns != "" {
+		ri = dynamicClient.Resource(gvr).Namespace(ns)
+	} else {
+		ri = dynamicClient.Resource(gvr)
+	}
+
+	obj, err := ri.Get(context.Background(), c, metav1.GetOptions{})
+	if err != nil {
+		log.Printf("Error fetching config [%s]: %v", c, err)
+		return "", err
+	}
+
+	// Determine platform from spec.providerRef.platform
+	platform, _, _ := unstructured.NestedString(obj.Object, "spec", "providerRef", "platform")
+
+	// If platform is gcp, use gcloud to obtain credentials (temporary kubeconfig)
+	if platform == "gcp" {
+		// Expect status.clusterName to exist for GKE clusters
+		clusterName, _, _ := unstructured.NestedString(obj.Object, "status", "externalClusterName")
+		if clusterName == "" {
+			return "", fmt.Errorf("externalClusterName not present for GCP platform")
+		}
+
+		// Extract location from spec.providerRef.zones.primary
+		provCfgZones, foundZones, err := unstructured.NestedStringMap(obj.Object, "spec", "providerRef", "zones")
+		if err != nil {
+			return "", err
+		}
+		if !foundZones {
+			return "", fmt.Errorf("providerRef.zones not found")
+		}
+		location := provCfgZones["primary"]
+		if location == "" {
+			log.Printf("primary zone not set in providerRef.zones for [%s]; cannot determine GKE location", c)
+			return "", fmt.Errorf("primary zone not set in providerRef.zones")
+		}
+
+		// Create a temporary kubeconfig file for gcloud to write into
+		tmpFile, err := os.CreateTemp("", "gke-kubeconfig-*")
+		if err != nil {
+			return "", fmt.Errorf("failed to create temporary kubeconfig file for [%s]: %v", c, err)
+		}
+		tmpName := tmpFile.Name()
+		if err := tmpFile.Close(); err != nil {
+			// not fatal, but log
+			log.Printf("warning: closing temp file %s: %v", tmpName, err)
+		}
+
+		// Run gcloud with KUBECONFIG env pointing to tmpName
+		// Using --zone; if your clusters are regional you may want to use --region instead.
+		gcCmd := exec.Command("gcloud", "container", "clusters", "get-credentials", clusterName, "--location", location)
+		gcCmd.Env = append(os.Environ(), "KUBECONFIG="+tmpName)
+		out, err := gcCmd.CombinedOutput()
+		if err != nil {
+			// Per your request, on gcloud errors we print and terminate.
+			log.Fatalf("gcloud failed to get credentials for cluster %s (location=%s): %v\nOutput: %s", clusterName, location, err, string(out))
+		}
+
+		kubeconfigBytes, err := os.ReadFile(tmpName)
+		// Attempt to remove temp file immediately after reading (ignore removal error)
+		_ = os.Remove(tmpName)
+		if err != nil {
+			log.Fatalf("failed to read kubeconfig written by gcloud for [%s]: %v", c, err)
+		}
+
+		staticKubeconfig, err := ensureStaticKubeconfig(kubeconfigBytes, c, "skycluster-system")
+		if err != nil {
+			return "", err
+		}
+
+		return staticKubeconfig, nil
+	}
+
+	// Non-GCP path: look for secret reference in status.clusterSecretName
+	secretName, found, err := unstructured.NestedString(obj.Object, "status", "clusterSecretName")
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("secret name not found for config [%s]", c)
+	}
+
+	// Secrets for xkube objects with kubeconfig are stored in skycluster-system
+	skyclusterNamespace := "skycluster-system"
+	// Fetch referenced secret
+	gvr = schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
+	secret, err := dynamicClient.Resource(gvr).Namespace(skyclusterNamespace).
+		Get(context.Background(), secretName, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("error fetching secret %s for config [%s]: %v", secretName, c, err)
+	}
+	// Process the secret as needed
+	kubeconfig_b64, found, err := unstructured.NestedString(secret.Object, "data", "kubeconfig")
+	if err != nil {
+		return "", fmt.Errorf("error fetching secret data for config [%s]: %v", c, err)
+	}
+	if !found {
+		return "", fmt.Errorf("secret data not found for config [%s]", c)
+	}
+	kubeconfigBytes, err := base64.StdEncoding.DecodeString(kubeconfig_b64)
+	if err != nil {
+		return "", fmt.Errorf("error decoding kubeconfig for config [%s]: %v", c, err)
+	}
+
+	// Create static credentials (ServiceAccount + ClusterRoleBinding + token secret) on the remote cluster
+	staticKubeconfig, err := ensureStaticKubeconfig(kubeconfigBytes, c, skyclusterNamespace)
+	if err != nil {
+		return "", fmt.Errorf("error creating static kubeconfig for [%s]: %v", c, err)
+	}
+
+	return staticKubeconfig, nil
 }
 
 // ensureStaticKubeconfig ensures a ServiceAccount and ClusterRoleBinding exist in the target cluster,
@@ -377,4 +350,40 @@ func ensureStaticKubeconfig(kubeconfigBytes []byte, clusterID string, targetName
 	}
 
 	return string(outBytes), nil
+}
+
+// Merge kubeconfig strings into one single kubeconfig YAML
+func mergeKubeconfigs(kubeconfigs []string) ([]byte, error) {
+	merged := api.NewConfig()
+
+	for _, raw := range kubeconfigs {
+		cfg, err := clientcmd.Load([]byte(raw))
+		if err != nil {
+			log.Printf("Error parsing kubeconfig: %v", err)
+			continue
+		}
+
+		// Merge clusters
+		for name, cluster := range cfg.Clusters {
+			merged.Clusters[name] = cluster
+		}
+
+		// Merge auth infos (users)
+		for name, user := range cfg.AuthInfos {
+			merged.AuthInfos[name] = user
+		}
+
+		// Merge contexts
+		for name, ctx := range cfg.Contexts {
+			merged.Contexts[name] = ctx
+		}
+
+		// Use the first non-empty current-context found
+		if merged.CurrentContext == "" && cfg.CurrentContext != "" {
+			merged.CurrentContext = cfg.CurrentContext
+		}
+	}
+
+	// Serialize
+	return clientcmd.Write(*merged)
 }
