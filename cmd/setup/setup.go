@@ -120,7 +120,7 @@ var setupCmd = &cobra.Command{
 		secret2 := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace: ns,
-				Name:      "skycluster-kubeconfig",
+				Name:      "skycluster-management",
 				Labels: map[string]string{
 					"skycluster.io/managed-by":  "skycluster",
 					"skycluster.io/secret-type": "k8s-connection-data",

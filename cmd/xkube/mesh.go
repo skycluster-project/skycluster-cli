@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 
 	"github.com/etesami/skycluster-cli/internal/utils"
@@ -47,15 +48,23 @@ var xkubeMeshCmd = &cobra.Command{
 		ns := ""
 
 		if enable {
-			
-			// best-effort cleanup of prior installations
-			performCleanup()
+			// best-effort cleanup of prior installations with progress indicator
+			runWithSpinner("Cleaning up prior installations", func() error {
+				performCleanup()
+				return nil 
+			})
 
-			if err := enableInterconnect(ns, podCIDR, serviceCIDR); err != nil {
+			// enable interconnect (wrap with spinner)
+			if err := runWithSpinner("Enabling interconnect", func() error {
+				return enableInterconnect(ns, podCIDR, serviceCIDR)
+			}); err != nil {
 				log.Fatalf("error enabling mesh: %v", err)
 			}
 		} else {
-			if err := disableInterconnect(ns); err != nil {
+			// disable interconnect with spinner
+			if err := runWithSpinner("Disabling interconnect", func() error {
+				return disableInterconnect(ns)
+			}); err != nil {
 				log.Fatalf("error disabling mesh: %v", err)
 			}
 		}
@@ -79,6 +88,8 @@ func performCleanup() {
 
 	// remote clusters
 	xkubesNames := listXKubesNames("")
+	cleanupKubeconfigSecrets(context.Background(), cs)
+
 	for _, name := range xkubesNames {
 		log.Printf("Preparing on xkube %s\n", name)
 		kConfig, err := getConfig(name, "")
@@ -400,6 +411,52 @@ func cleanupSubmarinerDaemonSets(ctx context.Context, cs *kubernetes.Clientset) 
 	for _, name := range dsNames {
 		// 1. Best-effort normal delete
 		_ = cs.AppsV1().DaemonSets(ns).Delete(ctx, name, metav1.DeleteOptions{})
+	}
+
+	return nil
+}
+
+func listXKubesExternalNames(ns string) []string {
+	kubeconfig := viper.GetString("kubeconfig")
+	dynamicClient, err := utils.GetDynamicClient(kubeconfig)
+	if err != nil {
+		return nil
+	}
+
+	gvr := schema.GroupVersionResource{
+		Group:    "skycluster.io",
+		Version:  "v1alpha1", 
+		Resource: "xkubes",
+	}
+	ri := dynamicClient.Resource(gvr)
+	
+	resources, err := ri.List(context.Background(), metav1.ListOptions{})
+	if err != nil {return nil}
+
+	names := []string{}
+	for _, resource := range resources.Items {
+		extNames, _, err := unstructured.NestedString(resource.Object, "status", "externalClusterName")
+		if err != nil {continue}
+		names = append(names, extNames)
+	}
+	return names
+}
+
+func cleanupKubeconfigSecrets(ctx context.Context, cs *kubernetes.Clientset) error {
+	secretList, err := cs.CoreV1().Secrets("skycluster-system").List(ctx, metav1.ListOptions{
+		LabelSelector: "skycluster.io/secret-type=static-kubeconfig",
+	})
+	if err != nil {return err}
+
+	extNames := listXKubesNames("")
+
+	for _, secret := range secretList.Items {
+
+		// if there is an existing xkube with this cluster-id, skip deletion
+		if slices.Contains(extNames, secret.Labels["skycluster.io/cluster-id"]) {continue}
+		
+		// 1. Best-effort normal delete
+		_ = cs.CoreV1().Secrets("skycluster-system").Delete(ctx, secret.Name, metav1.DeleteOptions{})
 	}
 
 	return nil

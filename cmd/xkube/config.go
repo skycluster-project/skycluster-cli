@@ -7,12 +7,14 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -28,13 +30,17 @@ import (
 var kubeNames []string
 var outPath string
 
+type clientSets struct {
+	dynamicClient dynamic.Interface
+	clientSet     *kubernetes.Clientset
+}
+
 func init() {
 	configShowCmd.PersistentFlags().StringSliceVarP(&kubeNames, "xkube", "k", nil, "Kube Names, separated by comma")
 	configShowCmd.PersistentFlags().StringVarP(&outPath, "out", "o", "", "Output file path (required)")
 	if err := configShowCmd.MarkPersistentFlagRequired("out"); err != nil {
 		log.Fatalf("failed to mark 'out' flag required: %v", err)
 	}
-	// configCmd.AddCommand(configShowCmd)
 }
 
 var configShowCmd = &cobra.Command{
@@ -42,26 +48,32 @@ var configShowCmd = &cobra.Command{
 	Short: "Show current kubeconfig of the xkube (writes to file)",
 	Run: func(cmd *cobra.Command, args []string) {
 		ns, _ := cmd.Root().PersistentFlags().GetString("namespace")
-		showConfigs(kubeNames, ns, outPath)
+		runWithSpinner("Fetching kubeconfigs", func() error {
+			showConfigs(kubeNames, ns, outPath)
+			return nil 
+		})
 	},
 }
 
 func showConfigs(kubeNames []string, ns string, outPath string) {
 	kubeconfigPath := viper.GetString("kubeconfig")
-	dynamicClient, err := utils.GetDynamicClient(kubeconfigPath)
-	if err != nil {
-		log.Fatalf("Error getting dynamic client: %v", err)
+	dynamicClient, err1 := utils.GetDynamicClient(kubeconfigPath)
+	clientSet, err2 := utils.GetClientset(kubeconfigPath)
+	if err1 != nil || err2 != nil {
+		log.Fatalf("Error getting dynamic client: %v", err1)
 		return
 	}
-
-	if len(kubeNames) == 0 {
-		kubeNames = listXKubesNames(ns)
+	localClients := clientSets{
+		dynamicClient: dynamicClient,
+		clientSet:     clientSet,
 	}
+
+	if len(kubeNames) == 0 {kubeNames = listXKubesNames(ns)}
 
 	var kubeconfigs []string
 	for _, c := range kubeNames {
-		
-		staticKubeconfig, err := generateKubeconfig(c, dynamicClient, ns)
+
+		staticKubeconfig, err := generateKubeconfig(c, localClients)
 		if err != nil {
 			log.Printf("Error generating kubeconfig for [%s]: %v", c, err)
 			continue
@@ -94,28 +106,29 @@ func showConfigs(kubeNames []string, ns string, outPath string) {
 
 func getConfig(kubeName string, ns string) (string, error) {
 	kubeconfigPath := viper.GetString("kubeconfig")
-	dynamicClient, err := utils.GetDynamicClient(kubeconfigPath)
-	if err != nil {
-		log.Fatalf("Error getting dynamic client: %v", err)
-		return "", err
+	dynamicClient, err1 := utils.GetDynamicClient(kubeconfigPath)
+	clientSet, err2 := utils.GetClientset(kubeconfigPath)
+	if err1 != nil || err2 != nil {
+		return "", err1
 	}
 
-	staticKubeconfig, err := generateKubeconfig(kubeName, dynamicClient, ns)
+	localClients := clientSets{
+		dynamicClient: dynamicClient,
+		clientSet:     clientSet,
+	}
+
+	staticKubeconfig, err := generateKubeconfig(kubeName, localClients)
 	if err != nil {
-		return "", fmt.Errorf("Error generating kubeconfig for [%s]: %v", kubeName, err)
+		return "", fmt.Errorf("error generating kubeconfig for [%s]: %v", kubeName, err)
 	}
 	
 	return staticKubeconfig, nil
 }
 
-func generateKubeconfig(c string, dynamicClient dynamic.Interface, ns string) (string, error) {
+func generateKubeconfig(c string, clientSets clientSets) (string, error) {
+	dynamicClient := clientSets.dynamicClient
 	gvr := schema.GroupVersionResource{Group: "skycluster.io", Version: "v1alpha1", Resource: "xkubes"}
-	var ri dynamic.ResourceInterface
-	if ns != "" {
-		ri = dynamicClient.Resource(gvr).Namespace(ns)
-	} else {
-		ri = dynamicClient.Resource(gvr)
-	}
+	ri := dynamicClient.Resource(gvr)
 
 	obj, err := ri.Get(context.Background(), c, metav1.GetOptions{})
 	if err != nil {
@@ -130,23 +143,15 @@ func generateKubeconfig(c string, dynamicClient dynamic.Interface, ns string) (s
 	if platform == "gcp" {
 		// Expect status.clusterName to exist for GKE clusters
 		clusterName, _, _ := unstructured.NestedString(obj.Object, "status", "externalClusterName")
-		if clusterName == "" {
-			return "", fmt.Errorf("externalClusterName not present for GCP platform")
-		}
+		if clusterName == "" {return "", fmt.Errorf("externalClusterName not present for GCP platform")}
 
 		// Extract location from spec.providerRef.zones.primary
 		provCfgZones, foundZones, err := unstructured.NestedStringMap(obj.Object, "spec", "providerRef", "zones")
-		if err != nil {
-			return "", err
-		}
-		if !foundZones {
-			return "", fmt.Errorf("providerRef.zones not found")
-		}
+		if err != nil {return "", err}
+		if !foundZones {return "", fmt.Errorf("providerRef.zones not found")}
+		
 		location := provCfgZones["primary"]
-		if location == "" {
-			log.Printf("primary zone not set in providerRef.zones for [%s]; cannot determine GKE location", c)
-			return "", fmt.Errorf("primary zone not set in providerRef.zones")
-		}
+		if location == "" {return "", fmt.Errorf("primary zone not set in providerRef.zones")}
 
 		// Create a temporary kubeconfig file for gcloud to write into
 		tmpFile, err := os.CreateTemp("", "gke-kubeconfig-*")
@@ -154,13 +159,9 @@ func generateKubeconfig(c string, dynamicClient dynamic.Interface, ns string) (s
 			return "", fmt.Errorf("failed to create temporary kubeconfig file for [%s]: %v", c, err)
 		}
 		tmpName := tmpFile.Name()
-		if err := tmpFile.Close(); err != nil {
-			// not fatal, but log
-			log.Printf("warning: closing temp file %s: %v", tmpName, err)
-		}
+		tmpFile.Close()
 
 		// Run gcloud with KUBECONFIG env pointing to tmpName
-		// Using --zone; if your clusters are regional you may want to use --region instead.
 		gcCmd := exec.Command("gcloud", "container", "clusters", "get-credentials", clusterName, "--location", location)
 		gcCmd.Env = append(os.Environ(), "KUBECONFIG="+tmpName)
 		out, err := gcCmd.CombinedOutput()
@@ -176,22 +177,17 @@ func generateKubeconfig(c string, dynamicClient dynamic.Interface, ns string) (s
 			log.Fatalf("failed to read kubeconfig written by gcloud for [%s]: %v", c, err)
 		}
 
-		staticKubeconfig, err := ensureStaticKubeconfig(kubeconfigBytes, c, "skycluster-system")
-		if err != nil {
-			return "", err
-		}
+		// Store/retrieve static kubeconfig in secret (and respect expiry)
+		staticKubeconfig, err := ensureStaticKubeconfig(kubeconfigBytes, c, "skycluster-system", clientSets)
+		if err != nil {return "", err}
 
 		return staticKubeconfig, nil
 	}
 
 	// Non-GCP path: look for secret reference in status.clusterSecretName
 	secretName, found, err := unstructured.NestedString(obj.Object, "status", "clusterSecretName")
-	if err != nil {
-		return "", err
-	}
-	if !found {
-		return "", fmt.Errorf("secret name not found for config [%s]", c)
-	}
+	if err != nil {return "", err}
+	if !found {return "", fmt.Errorf("secret name not found for config [%s]", c)}
 
 	// Secrets for xkube objects with kubeconfig are stored in skycluster-system
 	skyclusterNamespace := "skycluster-system"
@@ -204,45 +200,42 @@ func generateKubeconfig(c string, dynamicClient dynamic.Interface, ns string) (s
 	}
 	// Process the secret as needed
 	kubeconfig_b64, found, err := unstructured.NestedString(secret.Object, "data", "kubeconfig")
-	if err != nil {
-		return "", fmt.Errorf("error fetching secret data for config [%s]: %v", c, err)
-	}
-	if !found {
-		return "", fmt.Errorf("secret data not found for config [%s]", c)
-	}
-	kubeconfigBytes, err := base64.StdEncoding.DecodeString(kubeconfig_b64)
-	if err != nil {
-		return "", fmt.Errorf("error decoding kubeconfig for config [%s]: %v", c, err)
-	}
+	if err != nil {return "", fmt.Errorf("error fetching secret data for config [%s]: %v", c, err)}
+	if !found {return "", fmt.Errorf("secret data not found for config [%s]", c)}
 
-	// Create static credentials (ServiceAccount + ClusterRoleBinding + token secret) on the remote cluster
-	staticKubeconfig, err := ensureStaticKubeconfig(kubeconfigBytes, c, skyclusterNamespace)
-	if err != nil {
-		return "", fmt.Errorf("error creating static kubeconfig for [%s]: %v", c, err)
-	}
+	kubeconfigBytes, err := base64.StdEncoding.DecodeString(kubeconfig_b64)
+	if err != nil {return "", fmt.Errorf("error decoding kubeconfig for config [%s]: %v", c, err)}
+
+	// Create or reuse static credentials: store the static kubeconfig in a secret (with expiry)
+	staticKubeconfig, err := ensureStaticKubeconfig(kubeconfigBytes, c, skyclusterNamespace, clientSets)
+	if err != nil {return "", fmt.Errorf("error creating static kubeconfig for [%s]: %v", c, err)}
 
 	return staticKubeconfig, nil
 }
 
-// ensureStaticKubeconfig ensures a ServiceAccount and ClusterRoleBinding exist in the target cluster,
-// creates (or reuses) a service-account-token secret and waits for a token to be available, then
-// returns a kubeconfig that uses that static token.
-func ensureStaticKubeconfig(kubeconfigBytes []byte, clusterID string, targetNamespace string) (string, error) {
+// ensureStaticKubeconfig ensures a ServiceAccount and ClusterRoleBinding exist 
+// in the target cluster, creates (or reuses) a service-account-token via 
+// TokenRequest API and returns a kubeconfig that uses that static token.
+// The resulting kubeconfig is persisted into a secret in the targetNamespace 
+// named "<clusterID>-static-kubeconfig".
+// The secret includes an expiry annotation that corresponds to the token expiration. 
+// If the secret already exists and the stored expiry is still in the future, 
+// the stored kubeconfig is returned instead of generating a new token.
+func ensureStaticKubeconfig(kubeconfigBytes []byte, clusterID string, targetNamespace string, localClientSets clientSets) (string, error) {
+	// use for secret creation/checks
+	localClientSet := localClientSets.clientSet
+
 	// Build client from given kubeconfig bytes
 	restCfg, err := clientcmd.RESTConfigFromKubeConfig(kubeconfigBytes)
-	if err != nil {
-		return "", fmt.Errorf("building rest config from kubeconfig: %w", err)
-	}
+	if err != nil {return "", fmt.Errorf("building rest config from kubeconfig: %w", err)}
+
 	clientset, err := kubernetes.NewForConfig(restCfg)
-	if err != nil {
-		return "", fmt.Errorf("creating kubernetes client: %w", err)
-	}
+	if err != nil {return "", fmt.Errorf("creating kubernetes client: %w", err)}
 
 	// Parse kubeconfig to discover server and CA data and current context
 	parsedCfg, err := clientcmd.Load(kubeconfigBytes)
-	if err != nil {
-		return "", fmt.Errorf("parsing kubeconfig: %w", err)
-	}
+	if err != nil {return "", fmt.Errorf("parsing kubeconfig: %w", err)}
+
 	// Pick current context if available, otherwise first context
 	var ctxName string
 	if parsedCfg.CurrentContext != "" {
@@ -253,15 +246,12 @@ func ensureStaticKubeconfig(kubeconfigBytes []byte, clusterID string, targetName
 			break
 		}
 	}
-	if ctxName == "" {
-		return "", fmt.Errorf("no context found in kubeconfig")
-	}
+	if ctxName == "" {return "", fmt.Errorf("no context found in kubeconfig")}
+	
 	ctx := parsedCfg.Contexts[ctxName]
 	clusterRef := ctx.Cluster
 	clusterObj, ok := parsedCfg.Clusters[clusterRef]
-	if !ok {
-		return "", fmt.Errorf("cluster %q not found in kubeconfig", clusterRef)
-	}
+	if !ok {return "", fmt.Errorf("cluster %q not found in kubeconfig", clusterRef)}
 
 	// ensure target namespace
 	_, err = clientset.CoreV1().Namespaces().Get(context.Background(), targetNamespace, metav1.GetOptions{})
@@ -276,50 +266,89 @@ func ensureStaticKubeconfig(kubeconfigBytes []byte, clusterID string, targetName
 		}
 	}
 
+	// secret name where we'll store the static kubeconfig + expiry
+	secretName := clusterID + "-static-kubeconfig"
+	expiryAnnotation := "skycluster.io/expiry"
+
+	// Check for existing secret and its expiry
+	var existingSecret *corev1.Secret
+	existingSecret, err = localClientSet.CoreV1().Secrets(targetNamespace).Get(context.Background(), secretName, metav1.GetOptions{})
+	if err == nil {
+		// Secret exists; check expiry annotation and kubeconfig presence
+		if existingSecret.Data != nil {
+			if kcBytes, ok := existingSecret.Data["kubeconfig"]; ok && len(kcBytes) > 0 {
+				if ann := existingSecret.Annotations[expiryAnnotation]; ann != "" {
+					expiryTime, perr := time.Parse(time.RFC3339, ann)
+					if perr == nil {
+						if time.Now().UTC().Before(expiryTime) {
+							// Not expired: return stored kubeconfig
+							return string(kcBytes), nil
+						}
+						// expired -> proceed to create a new token and update secret
+					}
+				}
+			}
+		}
+	} else {
+		// If error is not NotFound, return it; if NotFound, we'll create a new secret later.
+		if !apierrors.IsNotFound(err) {
+			return "", fmt.Errorf("error checking existing secret %s/%s: %w", targetNamespace, secretName, err)
+		}
+	}
+
 	// Names for SA, CRB
 	saName := "skycluster-static-sa-" + clusterID
 	crbName := saName + "-crb"
 
-	// Create ServiceAccount if not exists
+	// Create ServiceAccount if not exists (remote cluster)
 	_, err = clientset.CoreV1().ServiceAccounts(targetNamespace).Get(context.Background(), saName, metav1.GetOptions{})
 	if err != nil {
-		_, err = clientset.CoreV1().ServiceAccounts(targetNamespace).Create(context.Background(), &corev1.ServiceAccount{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      saName,
-				Namespace: targetNamespace,
-				Labels: map[string]string{
-					"skycluster.io/managed-by": "skycluster",
+		if apierrors.IsNotFound(err) {
+			_, err = clientset.CoreV1().ServiceAccounts(targetNamespace).Create(context.Background(), &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      saName,
+					Namespace: targetNamespace,
+					Labels: map[string]string{
+						"skycluster.io/managed-by": "skycluster",
+					},
 				},
-			},
-		}, metav1.CreateOptions{})
-		if err != nil {
-			return "", fmt.Errorf("creating serviceaccount %s/%s: %w", targetNamespace, saName, err)
+			}, metav1.CreateOptions{})
+			if err != nil {
+				return "", fmt.Errorf("creating serviceaccount %s/%s: %w", targetNamespace, saName, err)
+			}
+		} else {
+			return "", fmt.Errorf("error checking serviceaccount %s/%s: %w", targetNamespace, saName, err)
 		}
 	}
 
 	// Ensure ClusterRoleBinding exists granting cluster-admin to that SA (adjust role as needed)
+	// (remote cluster)
 	_, err = clientset.RbacV1().ClusterRoleBindings().Get(context.Background(), crbName, metav1.GetOptions{})
 	if err != nil {
-		crb := &rbacv1.ClusterRoleBinding{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: crbName,
-			},
-			Subjects: []rbacv1.Subject{
-				{
-					Kind:      "ServiceAccount",
-					Name:      saName,
-					Namespace: targetNamespace,
+		if apierrors.IsNotFound(err) {
+			crb := &rbacv1.ClusterRoleBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: crbName,
 				},
-			},
-			RoleRef: rbacv1.RoleRef{
-				APIGroup: "rbac.authorization.k8s.io",
-				Kind:     "ClusterRole",
-				Name:     "cluster-admin",
-			},
-		}
-		_, err = clientset.RbacV1().ClusterRoleBindings().Create(context.Background(), crb, metav1.CreateOptions{})
-		if err != nil {
-			return "", fmt.Errorf("creating clusterrolebinding %s: %w", crbName, err)
+				Subjects: []rbacv1.Subject{
+					{
+						Kind:      "ServiceAccount",
+						Name:      saName,
+						Namespace: targetNamespace,
+					},
+				},
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: "rbac.authorization.k8s.io",
+					Kind:     "ClusterRole",
+					Name:     "cluster-admin",
+				},
+			}
+			_, err = clientset.RbacV1().ClusterRoleBindings().Create(context.Background(), crb, metav1.CreateOptions{})
+			if err != nil {
+				return "", fmt.Errorf("creating clusterrolebinding %s: %w", crbName, err)
+			}
+		} else {
+			return "", fmt.Errorf("error checking clusterrolebinding %s: %w", crbName, err)
 		}
 	}
 
@@ -330,17 +359,79 @@ func ensureStaticKubeconfig(kubeconfigBytes []byte, clusterID string, targetName
 		},
 	}
 	tokenResponse, err := clientset.CoreV1().ServiceAccounts(targetNamespace).CreateToken(context.Background(), saName, tokenRequest, metav1.CreateOptions{})
-	if err != nil {
-		return "", fmt.Errorf("creating service account token: %w", err)
-	}
+	if err != nil {return "", fmt.Errorf("creating service account token: %w", err)}
+	
 	token := []byte(tokenResponse.Status.Token)
+	// Build a kubeconfig that uses this token and the cluster info
+	outBytes, err := buildNewKubeconfig(clusterObj, clusterID, token)
+	if err != nil {return "", fmt.Errorf("writing new kubeconfig: %w", err)}
+	
+	// Persist the kubeconfig into a secret with expiry set to token expiration
+	var expiryTime time.Time
+	if tokenResponse.Status.ExpirationTimestamp.IsZero() {
+		// fallback if unavailable: set expiry to now + requested duration (ExpirationSeconds)
+	expiryTime = time.Now().UTC().Add(10 * time.Hour)
+	} else {
+		expiryTime = tokenResponse.Status.ExpirationTimestamp.Time.UTC()
+	}
+		
+	secretObj := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: targetNamespace,
+			Labels: map[string]string{
+				"skycluster.io/managed-by": "skycluster",
+				"skycluster.io/secret-type": "static-kubeconfig",
+				"skycluster.io/cluster-id":   clusterID,
+			},
+			Annotations: map[string]string{
+				expiryAnnotation: expiryTime.Format(time.RFC3339),
+			},
+		},
+		Data: map[string][]byte{
+			"kubeconfig": outBytes,
+		},
+		Type: corev1.SecretTypeOpaque,	
+	}
+
+	if existingSecret != nil && len(existingSecret.Data["kubeconfig"]) > 0 {
+		// update existing secret with new data/annotations
+		existingSecret.Data = secretObj.Data
+		if existingSecret.Annotations == nil {
+			existingSecret.Annotations = map[string]string{}
+		}
+		existingSecret.Annotations[expiryAnnotation] = expiryTime.Format(time.RFC3339)
+		_, err = localClientSet.CoreV1().Secrets(targetNamespace).Update(context.Background(), existingSecret, metav1.UpdateOptions{})
+		if err != nil {
+			return "", fmt.Errorf("updating secret %s/%s: %w", targetNamespace, secretName, err)
+		}
+	} else {
+		_, err = localClientSet.CoreV1().Secrets(targetNamespace).Create(context.Background(), secretObj, metav1.CreateOptions{})
+		if err != nil {
+			// If create failed because it already exists (race), try update
+			if apierrors.IsAlreadyExists(err) {
+				// attempt to update
+				_, err = localClientSet.CoreV1().Secrets(targetNamespace).Update(context.Background(), secretObj, metav1.UpdateOptions{})
+				if err != nil {
+					return "", fmt.Errorf("creating/updating secret %s/%s: %w", targetNamespace, secretName, err)
+				}
+			} else {
+				return "", fmt.Errorf("creating secret %s/%s: %w", targetNamespace, secretName, err)
+			}
+		}
+	}
+
+	return string(outBytes), nil
+}
+
+func buildNewKubeconfig(clusterObj *api.Cluster, clusterID string, token []byte) ([]byte, error) {
 
 	// Build a kubeconfig that uses this token and the cluster info
 	newCfg := api.NewConfig()
 
 	// choose unique names to avoid collision when merging multiple
-	clusterOutName := clusterID + "-" + clusterRef + "-cluster"
-	userOutName := clusterID 
+	clusterOutName := clusterID + "-cluster"
+	userOutName := clusterID
 	contextOutName := clusterID
 
 	newCfg.Clusters[clusterOutName] = &api.Cluster{
@@ -362,10 +453,10 @@ func ensureStaticKubeconfig(kubeconfigBytes []byte, clusterID string, targetName
 
 	outBytes, err := clientcmd.Write(*newCfg)
 	if err != nil {
-		return "", fmt.Errorf("writing new kubeconfig: %w", err)
+		return nil, fmt.Errorf("writing new kubeconfig: %w", err)
 	}
 
-	return string(outBytes), nil
+	return outBytes, nil
 }
 
 // Merge kubeconfig strings into one single kubeconfig YAML
