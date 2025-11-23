@@ -128,3 +128,38 @@ func listXKubes(ns string) {
 	}
 	writer.Flush()
 }
+
+
+func listXKubesNames(ns string) []string {
+	kubeconfig := viper.GetString("kubeconfig")
+	dynamicClient, err := utils.GetDynamicClient(kubeconfig)
+	if err != nil {
+		log.Fatalf("Error creating dynamic client: %v", err)
+		return nil
+	}
+
+	gvr := schema.GroupVersionResource{
+		Group:    "skycluster.io",
+		Version:  "v1alpha1", 
+		Resource: "xkubes",
+	}
+	var ri dynamic.ResourceInterface
+	if ns != "" {
+		ri = dynamicClient.Resource(gvr).Namespace(ns)
+	} else {
+		ri = dynamicClient.Resource(gvr)
+	}
+
+	resources, err := ri.List(context.Background(), metav1.ListOptions{})
+	// 	LabelSelector: "skycluster.io/managed-by=skycluster",
+	if err != nil {
+		log.Fatalf("Error listing resources: %v", err)
+		return nil
+	}
+
+	names := []string{}
+	for _, resource := range resources.Items {
+		names = append(names, resource.GetName())
+	}
+	return names
+}
