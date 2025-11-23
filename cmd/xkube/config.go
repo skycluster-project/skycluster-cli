@@ -92,6 +92,22 @@ func showConfigs(kubeNames []string, ns string, outPath string) {
 	fmt.Fprintf(os.Stderr, "Wrote kubeconfig to %s\n", outPath)
 }
 
+func getConfig(kubeName string, ns string) (string, error) {
+	kubeconfigPath := viper.GetString("kubeconfig")
+	dynamicClient, err := utils.GetDynamicClient(kubeconfigPath)
+	if err != nil {
+		log.Fatalf("Error getting dynamic client: %v", err)
+		return "", err
+	}
+
+	staticKubeconfig, err := generateKubeconfig(kubeName, dynamicClient, ns)
+	if err != nil {
+		return "", fmt.Errorf("Error generating kubeconfig for [%s]: %v", kubeName, err)
+	}
+	
+	return staticKubeconfig, nil
+}
+
 func generateKubeconfig(c string, dynamicClient dynamic.Interface, ns string) (string, error) {
 	gvr := schema.GroupVersionResource{Group: "skycluster.io", Version: "v1alpha1", Resource: "xkubes"}
 	var ri dynamic.ResourceInterface
