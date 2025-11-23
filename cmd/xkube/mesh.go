@@ -85,14 +85,15 @@ func enableInterconnect(ns string, podCIDR, serviceCIDR string) error {
 	if len(clusterNames) == 0 {
 		// You may choose to still create an empty mesh - here we create with empty list but warn.
 		fmt.Println("warning: no xkubes found; creating xkubemesh with an empty clusterNames list")
+		return nil
 	}
 
 	// Build desired xkubemesh unstructured object
 	meshName := "xkube-cluster-mesh"
 	xkubemesh := &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "skycluster.io/v1alpha",
-			"kind":       "XkubeMesh",
+			"apiVersion": "skycluster.io/v1alpha1",
+			"kind":       "XKubeMesh",
 			"metadata": map[string]interface{}{
 				"name": meshName,
 			},
@@ -110,7 +111,7 @@ func enableInterconnect(ns string, podCIDR, serviceCIDR string) error {
 	// GVR for xkubemeshes
 	meshGVR := schema.GroupVersionResource{
 		Group:    "skycluster.io",
-		Version:  "v1alpha",
+		Version:  "v1alpha1",
 		Resource: "xkubemeshes",
 	}
 
@@ -159,7 +160,7 @@ func disableInterconnect(ns string) error {
 
 	meshGVR := schema.GroupVersionResource{
 		Group:    "skycluster.io",
-		Version:  "v1alpha",
+		Version:  "v1alpha1",
 		Resource: "xkubemeshes",
 	}
 	meshName := "xkube-cluster-mesh"
