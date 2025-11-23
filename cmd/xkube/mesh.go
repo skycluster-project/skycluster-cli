@@ -4,14 +4,19 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/etesami/skycluster-cli/internal/utils"
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 )
 
 // init registers the command and flags. Hook this command into your root command assembly.
@@ -42,6 +47,10 @@ var xkubeMeshCmd = &cobra.Command{
 		ns := ""
 
 		if enable {
+			
+			// best-effort cleanup of prior installations
+			performCleanup()
+
 			if err := enableInterconnect(ns, podCIDR, serviceCIDR); err != nil {
 				log.Fatalf("error enabling mesh: %v", err)
 			}
@@ -51,6 +60,402 @@ var xkubeMeshCmd = &cobra.Command{
 			}
 		}
 	},
+}
+
+
+func performCleanup() {
+	// local management cluster
+	kubeconfig := viper.GetString("kubeconfig")
+	cs, err1 := utils.GetClientset(kubeconfig)	
+	csExt, err2 := utils.GetClientsetExtended(kubeconfig)
+	if err1 == nil && err2 == nil {
+		cleanupChart(cs, csExt)
+	}
+
+	dyn, err := utils.GetDynamicClient(kubeconfig)
+	if err == nil {
+		deleteSubmarinerEndpointsNotMatchingClusterID(context.Background(), dyn)
+	}
+
+	// remote clusters
+	xkubesNames := listXKubesNames("")
+	for _, name := range xkubesNames {
+		log.Printf("Preparing on xkube %s\n", name)
+		kConfig, err := getConfig(name, "")
+		if err != nil {
+			fmt.Printf("warning getting kubeconfig for xkube %s: %v\n", name, err)
+			continue
+		}
+		cs, err1 := utils.GetClientsetFromString(kConfig)
+		_, err2 := utils.GetClientsetExtendedFromString(kConfig)
+		if err1 != nil || err2 != nil {
+			fmt.Printf("warning creating clientset for xkube %s: %v %v\n", name, err1, err2)
+			continue
+		}
+		// cleanupChart(cs, csExt)
+
+		dyn, err := utils.GetDynamicClientFromString(kConfig)
+		if err != nil {
+			fmt.Printf("warning creating dynamic client for xkube %s: %v\n", name, err)
+			continue
+		}
+		deleteSubmariner(context.Background(), dyn)
+		cleanupSubmarinerDaemonSets(context.Background(), cs)
+	}
+}
+
+func cleanupChart(cs *kubernetes.Clientset, csExt *apiextv1.Clientset) error {
+	// ChartSpec represents the static chart metadata you provided.
+	type ChartSpec struct {
+		Label       string
+		Version     string
+		Repo        string
+		Name        string
+		Namespace   string
+		BlockingObj string // space-separated "Kind/name"
+		PrefixObj   string
+	}
+	
+	// Static definitions based on your input
+	var chartsToCleanup []ChartSpec
+	
+	// submariner
+	subm := ChartSpec{
+		Label:       "subm",
+		Version:     "0.20.1",
+		Repo:        "https://submariner-io.github.io/submariner-charts/charts",
+		Name:        "submariner-operator",
+		Namespace:   "submariner-operator",
+		BlockingObj: "Submariner/submariner",
+		PrefixObj:   "submariner",
+	}
+	
+	// istio: produce blocking objects list for "base" and "istiod"
+	istioBlockingCRDs := []string{
+		"wasmplugins.extensions.istio.io",
+		"destinationrules.networking.istio.io",
+		"envoyfilters.networking.istio.io",
+		"gateways.networking.istio.io",
+		"proxyconfigs.networking.istio.io",
+		"serviceentries.networking.istio.io",
+		"sidecars.networking.istio.io",
+		"virtualservices.networking.istio.io",
+		"workloadentries.networking.istio.io",
+		"authorizationpolicies.security.istio.io",
+		"peerauthentications.security.istio.io",
+		"requestauthentications.security.istio.io",
+		"telemetries.telemetry.istio.io",
+	}
+	// build space-separated "CustomResourceDefinition/<name>" list
+	var crdList []string
+	for _, s := range istioBlockingCRDs {
+		crdList = append(crdList, fmt.Sprintf("CustomResourceDefinition/%s", s))
+	}
+	crdBlockingStr := strings.Join(crdList, " ")
+	
+	// Two istio charts: base and istiod
+	istioBase := ChartSpec{
+		Label:       "base",
+		Version:     "1.27.0",
+		Repo:        "https://istio-release.storage.googleapis.com/charts",
+		Name:        "base",
+		Namespace:   "istio-system",
+		BlockingObj: crdBlockingStr,
+		PrefixObj:   "istio",
+	}
+	istiod := ChartSpec{
+		Label:       "istiod",
+		Version:     "1.27.0",
+		Repo:        "https://istio-release.storage.googleapis.com/charts",
+		Name:        "istiod",
+		Namespace:   "istio-system",
+		BlockingObj: crdBlockingStr, // same CRDs are relevant
+		PrefixObj:   "istio",
+	}
+
+	chartsToCleanup = []ChartSpec{subm, istioBase, istiod}
+	for _, ch := range chartsToCleanup {
+		if ch.Name == "istiod" {
+			_ = deleteIstioReaderServiceAccount(context.Background(), cs)
+		}
+		deleteClusterRolesByPrefix(context.Background(), cs, ch.PrefixObj)
+		deleteClusterRoleBindingsByPrefix(context.Background(), cs, ch.PrefixObj)
+		deleteCRDsForChart(context.Background(), csExt, ch.Name)
+	}
+	return nil
+}
+
+func deleteIstioReaderServiceAccount(ctx context.Context, cs *kubernetes.Clientset) error {
+	type svcAcc struct {
+		Namespace string
+		Name      string
+	}
+	svcAccs := []svcAcc{
+		{
+			Namespace: "istio-system",
+			Name:      "istio-reader-service-account",
+		},
+		{
+			Namespace: "",
+			Name:      "istio-reader-clusterrole-istio-system",
+		},
+	}
+	for _, sa := range svcAccs {
+
+		// ---- 1. Best-effort normal delete ----
+		_ = cs.CoreV1().ServiceAccounts(sa.Namespace).Delete(ctx, sa.Name, metav1.DeleteOptions{})
+
+		// ---- 2. Check if still exists ----
+		sa, err := cs.CoreV1().ServiceAccounts(sa.Namespace).Get(ctx, sa.Name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+
+		// ---- 3. Remove finalizers if any ----
+		if len(sa.Finalizers) > 0 {
+			sa.Finalizers = []string{}
+			_, _ = cs.CoreV1().ServiceAccounts(sa.Namespace).Update(ctx, sa, metav1.UpdateOptions{})
+		}
+
+		// ---- 4. Delete again ----
+		_ = cs.CoreV1().ServiceAccounts(sa.Namespace).Delete(ctx, sa.Name, metav1.DeleteOptions{})
+		// ---- 5. Force delete if still present ----
+		_, err = cs.CoreV1().ServiceAccounts(sa.Namespace).Get(ctx, sa.Name, metav1.GetOptions{})
+		if err == nil {
+			fmt.Printf("Force deleting %s/%s\n", sa.Namespace, sa.Name)
+			zero := int64(0)
+			_ = cs.CoreV1().ServiceAccounts(sa.Namespace).Delete(ctx, sa.Name, metav1.DeleteOptions{
+				GracePeriodSeconds: &zero,
+			})
+		}
+	}
+
+	return nil
+}
+
+// deleteClusterRolesByPrefix deletes clusterroles whose name starts with prefix.
+func deleteClusterRolesByPrefix(ctx context.Context, cs *kubernetes.Clientset, prefix string) error {
+	if prefix == "" {return nil}
+
+	crList, err := cs.RbacV1().ClusterRoles().List(ctx, metav1.ListOptions{})
+	if err != nil {return nil}
+
+	for _, cr := range crList.Items {
+		if strings.HasPrefix(cr.Name, prefix) {
+			_ = cs.RbacV1().ClusterRoles().Delete(ctx, cr.Name, metav1.DeleteOptions{})
+		}
+	}
+	return nil
+}
+
+// deleteClusterRoleBindingsByPrefix deletes ClusterRoleBindings whose name starts with prefix.
+// It tries normal delete, patches finalizers if necessary, deletes again, and as last resort force deletes.
+func deleteClusterRoleBindingsByPrefix(ctx context.Context, cs *kubernetes.Clientset, prefix string) error {
+	if prefix == "" {return nil}
+
+	crbList, err := cs.RbacV1().ClusterRoleBindings().List(ctx, metav1.ListOptions{})
+	if err != nil {return nil}
+
+	toDelete := []string{}
+	for _, crb := range crbList.Items {
+		if strings.HasPrefix(crb.Name, prefix) {
+			toDelete = append(toDelete, crb.Name)
+		}
+	}
+
+	if len(toDelete) == 0 {return nil}
+
+	for _, name := range toDelete {
+		_ = cs.RbacV1().ClusterRoleBindings().Delete(ctx, name, metav1.DeleteOptions{})
+
+		// If it lingers, remove finalizers then delete again
+		crb, err := cs.RbacV1().ClusterRoleBindings().Get(ctx, name, metav1.GetOptions{})
+		if err == nil && len(crb.Finalizers) > 0 {
+			crb.Finalizers = []string{}
+			_, _ = cs.RbacV1().ClusterRoleBindings().Update(ctx, crb, metav1.UpdateOptions{})
+			_ = cs.RbacV1().ClusterRoleBindings().Delete(ctx, name, metav1.DeleteOptions{})
+		}
+
+		// Last resort force delete
+		_, err = cs.RbacV1().ClusterRoleBindings().Get(ctx, name, metav1.GetOptions{})
+		if err == nil {
+			fmt.Printf("Force deleting clusterrolebinding/%s\n", name)
+			zero := int64(0)
+			_ = cs.RbacV1().ClusterRoleBindings().Delete(ctx, name, metav1.DeleteOptions{
+				GracePeriodSeconds: &zero,
+			})
+		}
+	}
+
+	return nil
+}
+
+// deleteCRDsForChart deletes CRDs 
+// if chartName == "base", match CRDs whose spec.group contains "istio".
+func deleteCRDsForChart(ctx context.Context, apiExtClient *apiextv1.Clientset, chartName string) error {
+	if chartName != "base" {return nil}
+
+	pattern := "istio"
+
+	crdList, err := apiExtClient.ApiextensionsV1().CustomResourceDefinitions().List(ctx, metav1.ListOptions{})
+	if err != nil {return nil}
+
+	matched := []string{}
+	for _, crd := range crdList.Items {
+		if strings.Contains(crd.Spec.Group, pattern) {
+			matched = append(matched, crd.Name)
+		}
+	}
+
+	if len(matched) == 0 {return nil}
+	for _, crdName := range matched {
+		_ = apiExtClient.ApiextensionsV1().CustomResourceDefinitions().Delete(ctx, crdName, metav1.DeleteOptions{})
+	}
+
+	return nil
+}
+
+func deleteSubmarinerEndpointsNotMatchingClusterID(ctx context.Context, dyn dynamic.Interface) error {
+
+	clusterIDtoSkip := "broker-skycluster"
+	gvrs := []schema.GroupVersionResource{
+		{
+			Group:    "submariner.io",
+			Version:  "v1",
+			Resource: "endpoints", // plural resource name of the CRD
+		},
+		{
+			Group:    "submariner.io",
+			Version:  "v1",
+			Resource: "clusters", // plural resource name of the CRD
+		},
+	}
+	
+	for _, gvr := range gvrs {
+		
+		// List across all namespaces (works for both namespaced and cluster-scoped resources)
+		ns := "skycluster-system"
+		list, err := dyn.Resource(gvr).Namespace(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {return err}
+	
+		for _, item := range list.Items {
+			labels := item.GetLabels()
+			if val, ok := labels["submariner-io/clusterID"]; ok && val == clusterIDtoSkip {
+				// keep endpoints that match the desired clusterID
+				continue
+			}
+	
+			name := item.GetName()
+			loc := name
+			if ns != "" {loc = ns + "/" + name}
+	
+			var res dynamic.ResourceInterface
+			if ns == "" {
+				res = dyn.Resource(gvr)
+			} else {
+				res = dyn.Resource(gvr).Namespace(ns)
+			}
+	
+			// 1. Best-effort normal delete
+			_ = res.Delete(ctx, name, metav1.DeleteOptions{})
+	
+			// 2. Check if still exists
+			obj, err := res.Get(ctx, name, metav1.GetOptions{})
+			if apierrors.IsNotFound(err) {continue}
+	
+			// 3. Remove finalizers if any
+			if err == nil && len(obj.GetFinalizers()) > 0 {
+				obj.SetFinalizers([]string{})
+				_, _ = res.Update(ctx, obj, metav1.UpdateOptions{})
+			}
+	
+			// 4. Delete again
+			_ = res.Delete(ctx, name, metav1.DeleteOptions{})
+	
+			// 5. Force delete if still present
+			_, err = res.Get(ctx, name, metav1.GetOptions{})
+			if err == nil {
+				fmt.Printf("Force deleting submariner endpoint %s\n", loc)
+				zero := int64(0)
+				_ = res.Delete(ctx, name, metav1.DeleteOptions{
+					GracePeriodSeconds: &zero,
+				})
+			}
+		}
+	}
+
+	return nil
+}
+
+func cleanupSubmarinerDaemonSets(ctx context.Context, cs *kubernetes.Clientset) error {
+	dsNames := []string{
+		"submariner-gateway",
+		"submariner-routeagent",
+		"submariner-lighthouse-agent",
+		"submariner-lighthouse-coredns",
+		"submariner-metrics-proxy",
+	}
+	ns := "submariner-operator"
+
+	for _, name := range dsNames {
+		// 1. Best-effort normal delete
+		_ = cs.AppsV1().DaemonSets(ns).Delete(ctx, name, metav1.DeleteOptions{})
+	}
+
+	return nil
+}
+
+func deleteSubmariner(ctx context.Context, dyn dynamic.Interface) error {
+
+	gvrs := []schema.GroupVersionResource{
+		{
+			Group:    "submariner.io",
+			Version:  "v1alpha1",
+			Resource: "submariners",
+		},
+	}
+	
+	for _, gvr := range gvrs {
+		
+		list, err := dyn.Resource(gvr).Namespace("submariner-operator").List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return err
+		}
+	
+		for _, item := range list.Items {
+			
+			name := item.GetName()	
+			// 1. Best-effort normal delete
+			dyn.Resource(gvr).Namespace("submariner-operator").Delete(ctx, name, metav1.DeleteOptions{})
+	
+			// 2. Check if still exists
+			obj, err := dyn.Resource(gvr).Namespace("submariner-operator").Get(ctx, name, metav1.GetOptions{})
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+	
+			// 3. Remove finalizers if any
+			if err == nil && len(obj.GetFinalizers()) > 0 {
+				obj.SetFinalizers([]string{})
+				_, _ = dyn.Resource(gvr).Namespace("submariner-operator").Update(ctx, obj, metav1.UpdateOptions{})
+			}
+	
+			// 4. Delete again
+			_ = dyn.Resource(gvr).Namespace("submariner-operator").Delete(ctx, name, metav1.DeleteOptions{})
+	
+			// 5. Force delete if still present
+			_, err = dyn.Resource(gvr).Namespace("submariner-operator").Get(ctx, name, metav1.GetOptions{})
+			if err == nil {
+				fmt.Printf("Force deleting submariner endpoint %s\n", name)
+				zero := int64(0)
+				_ = dyn.Resource(gvr).Namespace("submariner-operator").Delete(ctx, name, metav1.DeleteOptions{
+					GracePeriodSeconds: &zero,
+				})
+			}
+		}
+	}
+
+	return nil
 }
 
 // enableInterconnect lists all xkubes.skycluster.io objects and upserts a single
