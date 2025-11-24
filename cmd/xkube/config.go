@@ -73,7 +73,7 @@ func showConfigs(kubeNames []string, ns string, outPath string) {
 	var kubeconfigs []string
 	for _, c := range kubeNames {
 
-		staticKubeconfig, err := generateKubeconfig(c, localClients)
+		staticKubeconfig, err := fetchKubeconfig(c, localClients)
 		if err != nil {
 			log.Printf("Error generating kubeconfig for [%s]: %v", c, err)
 			continue
@@ -117,7 +117,7 @@ func getConfig(kubeName string, ns string) (string, error) {
 		clientSet:     clientSet,
 	}
 
-	staticKubeconfig, err := generateKubeconfig(kubeName, localClients)
+	staticKubeconfig, err := fetchKubeconfig(kubeName, localClients)
 	if err != nil {
 		return "", fmt.Errorf("error generating kubeconfig for [%s]: %v", kubeName, err)
 	}
@@ -125,15 +125,26 @@ func getConfig(kubeName string, ns string) (string, error) {
 	return staticKubeconfig, nil
 }
 
-func generateKubeconfig(c string, clientSets clientSets) (string, error) {
+func fetchKubeconfig(xkubeName string, clientSets clientSets) (string, error) {
 	dynamicClient := clientSets.dynamicClient
 	gvr := schema.GroupVersionResource{Group: "skycluster.io", Version: "v1alpha1", Resource: "xkubes"}
 	ri := dynamicClient.Resource(gvr)
 
-	obj, err := ri.Get(context.Background(), c, metav1.GetOptions{})
+	obj, err := ri.Get(context.Background(), xkubeName, metav1.GetOptions{})
 	if err != nil {
-		log.Printf("Error fetching config [%s]: %v", c, err)
+		log.Printf("Error fetching config [%s]: %v", xkubeName, err)
 		return "", err
+	}
+	
+	clusterName, _, _ := unstructured.NestedString(obj.Object, "status", "externalClusterName")
+	if clusterName == "" {return "", fmt.Errorf("externalClusterName not present for GCP platform")}
+
+	// Check for existing static kubeconfig secret and its validity
+	ns := ""
+	existingSecret, err := fetchStaticKubeconfigSecret(clusterName, ns, clientSets.clientSet)
+	if err == nil && len(existingSecret) > 0 {
+		// found existing valid static kubeconfig secret
+		return string(existingSecret), nil
 	}
 
 	// Determine platform from spec.providerRef.platform
@@ -141,10 +152,6 @@ func generateKubeconfig(c string, clientSets clientSets) (string, error) {
 
 	// If platform is gcp, use gcloud to obtain credentials (temporary kubeconfig)
 	if platform == "gcp" {
-		// Expect status.clusterName to exist for GKE clusters
-		clusterName, _, _ := unstructured.NestedString(obj.Object, "status", "externalClusterName")
-		if clusterName == "" {return "", fmt.Errorf("externalClusterName not present for GCP platform")}
-
 		// Extract location from spec.providerRef.zones.primary
 		provCfgZones, foundZones, err := unstructured.NestedStringMap(obj.Object, "spec", "providerRef", "zones")
 		if err != nil {return "", err}
@@ -156,7 +163,7 @@ func generateKubeconfig(c string, clientSets clientSets) (string, error) {
 		// Create a temporary kubeconfig file for gcloud to write into
 		tmpFile, err := os.CreateTemp("", "gke-kubeconfig-*")
 		if err != nil {
-			return "", fmt.Errorf("failed to create temporary kubeconfig file for [%s]: %v", c, err)
+			return "", fmt.Errorf("failed to create temporary kubeconfig file for [%s]: %v", xkubeName, err)
 		}
 		tmpName := tmpFile.Name()
 		tmpFile.Close()
@@ -174,11 +181,11 @@ func generateKubeconfig(c string, clientSets clientSets) (string, error) {
 		// Attempt to remove temp file immediately after reading (ignore removal error)
 		_ = os.Remove(tmpName)
 		if err != nil {
-			log.Fatalf("failed to read kubeconfig written by gcloud for [%s]: %v", c, err)
+			log.Fatalf("failed to read kubeconfig written by gcloud for [%s]: %v", xkubeName, err)
 		}
 
 		// Store/retrieve static kubeconfig in secret (and respect expiry)
-		staticKubeconfig, err := ensureStaticKubeconfig(kubeconfigBytes, c, "skycluster-system", clientSets)
+		staticKubeconfig, err := ensureStaticKubeconfig(kubeconfigBytes, xkubeName, "skycluster-system", clientSets)
 		if err != nil {return "", err}
 
 		return staticKubeconfig, nil
@@ -187,7 +194,7 @@ func generateKubeconfig(c string, clientSets clientSets) (string, error) {
 	// Non-GCP path: look for secret reference in status.clusterSecretName
 	secretName, found, err := unstructured.NestedString(obj.Object, "status", "clusterSecretName")
 	if err != nil {return "", err}
-	if !found {return "", fmt.Errorf("secret name not found for config [%s]", c)}
+	if !found {return "", fmt.Errorf("secret name not found for config [%s]", xkubeName)}
 
 	// Secrets for xkube objects with kubeconfig are stored in skycluster-system
 	skyclusterNamespace := "skycluster-system"
@@ -196,19 +203,19 @@ func generateKubeconfig(c string, clientSets clientSets) (string, error) {
 	secret, err := dynamicClient.Resource(gvr).Namespace(skyclusterNamespace).
 		Get(context.Background(), secretName, metav1.GetOptions{})
 	if err != nil {
-		return "", fmt.Errorf("error fetching secret %s for config [%s]: %v", secretName, c, err)
+		return "", fmt.Errorf("error fetching secret %s for config [%s]: %v", secretName, xkubeName, err)
 	}
 	// Process the secret as needed
 	kubeconfig_b64, found, err := unstructured.NestedString(secret.Object, "data", "kubeconfig")
-	if err != nil {return "", fmt.Errorf("error fetching secret data for config [%s]: %v", c, err)}
-	if !found {return "", fmt.Errorf("secret data not found for config [%s]", c)}
+	if err != nil {return "", fmt.Errorf("error fetching secret data for config [%s]: %v", xkubeName, err)}
+	if !found {return "", fmt.Errorf("secret data not found for config [%s]", xkubeName)}
 
 	kubeconfigBytes, err := base64.StdEncoding.DecodeString(kubeconfig_b64)
-	if err != nil {return "", fmt.Errorf("error decoding kubeconfig for config [%s]: %v", c, err)}
+	if err != nil {return "", fmt.Errorf("error decoding kubeconfig for config [%s]: %v", xkubeName, err)}
 
 	// Create or reuse static credentials: store the static kubeconfig in a secret (with expiry)
-	staticKubeconfig, err := ensureStaticKubeconfig(kubeconfigBytes, c, skyclusterNamespace, clientSets)
-	if err != nil {return "", fmt.Errorf("error creating static kubeconfig for [%s]: %v", c, err)}
+	staticKubeconfig, err := ensureStaticKubeconfig(kubeconfigBytes, xkubeName, skyclusterNamespace, clientSets)
+	if err != nil {return "", fmt.Errorf("error creating static kubeconfig for [%s]: %v", xkubeName, err)}
 
 	return staticKubeconfig, nil
 }
@@ -264,43 +271,12 @@ func ensureStaticKubeconfig(kubeconfigBytes []byte, clusterID string, targetName
 		if err != nil {
 			return "", fmt.Errorf("creating namespace %s: %w", targetNamespace, err)
 		}
-	}
+	}	
 
-	// secret name where we'll store the static kubeconfig + expiry
-	secretName := clusterID + "-static-kubeconfig"
-	expiryAnnotation := "skycluster.io/expiry"
-
-	// Check for existing secret and its expiry
-	var existingSecret *corev1.Secret
-	existingSecret, err = localClientSet.CoreV1().Secrets(targetNamespace).Get(context.Background(), secretName, metav1.GetOptions{})
-	if err == nil {
-		// Secret exists; check expiry annotation and kubeconfig presence
-		if existingSecret.Data != nil {
-			if kcBytes, ok := existingSecret.Data["kubeconfig"]; ok && len(kcBytes) > 0 {
-				if ann := existingSecret.Annotations[expiryAnnotation]; ann != "" {
-					expiryTime, perr := time.Parse(time.RFC3339, ann)
-					if perr == nil {
-						if time.Now().UTC().Before(expiryTime) {
-							// Not expired: return stored kubeconfig
-							return string(kcBytes), nil
-						}
-						// expired -> proceed to create a new token and update secret
-					}
-				}
-			}
-		}
-	} else {
-		// If error is not NotFound, return it; if NotFound, we'll create a new secret later.
-		if !apierrors.IsNotFound(err) {
-			return "", fmt.Errorf("error checking existing secret %s/%s: %w", targetNamespace, secretName, err)
-		}
-	}
-
+	// Create ServiceAccount if not exists (remote cluster)
 	// Names for SA, CRB
 	saName := "skycluster-static-sa-" + clusterID
 	crbName := saName + "-crb"
-
-	// Create ServiceAccount if not exists (remote cluster)
 	_, err = clientset.CoreV1().ServiceAccounts(targetNamespace).Get(context.Background(), saName, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -366,7 +342,7 @@ func ensureStaticKubeconfig(kubeconfigBytes []byte, clusterID string, targetName
 	outBytes, err := buildNewKubeconfig(clusterObj, clusterID, token)
 	if err != nil {return "", fmt.Errorf("writing new kubeconfig: %w", err)}
 	
-	// Persist the kubeconfig into a secret with expiry set to token expiration
+	// Persist the kubeconfig into a secret with expiry set to token expiration	
 	var expiryTime time.Time
 	if tokenResponse.Status.ExpirationTimestamp.IsZero() {
 		// fallback if unavailable: set expiry to now + requested duration (ExpirationSeconds)
@@ -374,7 +350,10 @@ func ensureStaticKubeconfig(kubeconfigBytes []byte, clusterID string, targetName
 	} else {
 		expiryTime = tokenResponse.Status.ExpirationTimestamp.Time.UTC()
 	}
-		
+
+	// Check for existing secret and its expiry
+	// secret name where we'll store the static kubeconfig + expiry
+	secretName := clusterID + "-static-kubeconfig"
 	secretObj := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,
@@ -385,7 +364,7 @@ func ensureStaticKubeconfig(kubeconfigBytes []byte, clusterID string, targetName
 				"skycluster.io/cluster-id":   clusterID,
 			},
 			Annotations: map[string]string{
-				expiryAnnotation: expiryTime.Format(time.RFC3339),
+				"skycluster.io/expiry": expiryTime.Format(time.RFC3339),
 			},
 		},
 		Data: map[string][]byte{
@@ -394,34 +373,52 @@ func ensureStaticKubeconfig(kubeconfigBytes []byte, clusterID string, targetName
 		Type: corev1.SecretTypeOpaque,	
 	}
 
-	if existingSecret != nil && len(existingSecret.Data["kubeconfig"]) > 0 {
-		// update existing secret with new data/annotations
-		existingSecret.Data = secretObj.Data
-		if existingSecret.Annotations == nil {
-			existingSecret.Annotations = map[string]string{}
-		}
-		existingSecret.Annotations[expiryAnnotation] = expiryTime.Format(time.RFC3339)
-		_, err = localClientSet.CoreV1().Secrets(targetNamespace).Update(context.Background(), existingSecret, metav1.UpdateOptions{})
-		if err != nil {
-			return "", fmt.Errorf("updating secret %s/%s: %w", targetNamespace, secretName, err)
-		}
-	} else {
-		_, err = localClientSet.CoreV1().Secrets(targetNamespace).Create(context.Background(), secretObj, metav1.CreateOptions{})
-		if err != nil {
-			// If create failed because it already exists (race), try update
-			if apierrors.IsAlreadyExists(err) {
-				// attempt to update
-				_, err = localClientSet.CoreV1().Secrets(targetNamespace).Update(context.Background(), secretObj, metav1.UpdateOptions{})
-				if err != nil {
-					return "", fmt.Errorf("creating/updating secret %s/%s: %w", targetNamespace, secretName, err)
-				}
-			} else {
-				return "", fmt.Errorf("creating secret %s/%s: %w", targetNamespace, secretName, err)
+	// Create or update secret
+	_, err = localClientSet.CoreV1().Secrets(targetNamespace).Create(context.Background(), secretObj, metav1.CreateOptions{})
+	if err != nil {
+		// If create failed because it already exists (race), try update
+		if apierrors.IsAlreadyExists(err) {
+			// attempt to update
+			_, err = localClientSet.CoreV1().Secrets(targetNamespace).Update(context.Background(), secretObj, metav1.UpdateOptions{})
+			if err != nil {
+				return "", fmt.Errorf("creating/updating secret %s/%s: %w", targetNamespace, secretName, err)
 			}
+		} else {
+			return "", fmt.Errorf("creating secret %s/%s: %w", targetNamespace, secretName, err)
 		}
 	}
 
 	return string(outBytes), nil
+}
+
+// return static kubeconfig (byte) from secret if exists and not expired
+func fetchStaticKubeconfigSecret(clusterID string, targetNamespace string, localClientSet *kubernetes.Clientset) ([]byte, error) {
+	// secret name where we'll store the static kubeconfig + expiry
+	secretName := clusterID + "-static-kubeconfig"
+	expiryAnnotation := "skycluster.io/expiry"
+
+	// Check for existing secret and its expiry
+	existingSecret, err := localClientSet.CoreV1().Secrets(targetNamespace).Get(context.Background(), secretName, metav1.GetOptions{})
+	if err == nil {
+		// Secret exists; check expiry annotation and kubeconfig presence
+		if existingSecret.Data != nil {
+			if kcBytes, ok := existingSecret.Data["kubeconfig"]; ok && len(kcBytes) > 0 {
+				if ann := existingSecret.Annotations[expiryAnnotation]; ann != "" {
+					expiryTime, perr := time.Parse(time.RFC3339, ann)
+					if perr == nil {
+						if time.Now().UTC().Before(expiryTime) {
+							// Not expired: return stored kubeconfig
+							return kcBytes, nil
+						}
+						// expired -> proceed to create a new token and update secret
+					}
+				}
+			}
+		}
+	} else {
+		return nil, fmt.Errorf("error checking existing secret %s/%s: %w", targetNamespace, secretName, err)
+	}
+	return nil, fmt.Errorf("static kubeconfig secret %s/%s not found or expired", targetNamespace, secretName)
 }
 
 func buildNewKubeconfig(clusterObj *api.Cluster, clusterID string, token []byte) ([]byte, error) {

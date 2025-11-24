@@ -24,6 +24,7 @@ import (
 func init() {
 	xkubeMeshCmd.PersistentFlags().Bool("enable", false, "Enable mesh (create/update the single XkubeMesh)")
 	xkubeMeshCmd.PersistentFlags().Bool("disable", false, "Disable mesh (delete the single XkubeMesh)")
+	xkubeMeshCmd.PersistentFlags().Bool("cleanup", false, "Cleanup prior installations before enabling mesh")
 	// local cluster CIDRs - user can override; defaults taken from your example
 	xkubeMeshCmd.PersistentFlags().String("pod-cidr", "10.0.0.0/19", "local cluster Pod CIDR")
 	xkubeMeshCmd.PersistentFlags().String("service-cidr", "10.0.32.0/19", "local cluster Service CIDR")
@@ -36,8 +37,17 @@ var xkubeMeshCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		enable, _ := cmd.Flags().GetBool("enable")
 		disable, _ := cmd.Flags().GetBool("disable")
+		cleanup, _ := cmd.Flags().GetBool("cleanup")
 		podCIDR, _ := cmd.Flags().GetString("pod-cidr")
 		serviceCIDR, _ := cmd.Flags().GetString("service-cidr")
+
+		if cleanup {
+			// best-effort cleanup of prior installations with progress indicator
+			runWithSpinner("Cleaning up prior installations", func() error {
+				performCleanup()
+				return nil 
+			})
+		}
 
 		if enable == disable {
 			log.Fatalf("please specify exactly one of --enable or --disable")
@@ -46,20 +56,27 @@ var xkubeMeshCmd = &cobra.Command{
 
 		// namespace is empty string per your guideline
 		ns := ""
-
 		if enable {
-			// best-effort cleanup of prior installations with progress indicator
-			runWithSpinner("Cleaning up prior installations", func() error {
-				performCleanup()
-				return nil 
-			})
-
 			// enable interconnect (wrap with spinner)
 			if err := runWithSpinner("Enabling interconnect", func() error {
 				return enableInterconnect(ns, podCIDR, serviceCIDR)
 			}); err != nil {
 				log.Fatalf("error enabling mesh: %v", err)
 			}
+			
+			// wait for activation and then install remote secrets
+			if err := runWithSpinner("Waiting for activation", func() error {
+				c, err := NewController(viper.GetString("kubeconfig"), ns)
+				if err != nil {return err}
+				
+				err = c.Run(context.Background())
+				if err != nil {return err}
+
+				return nil
+			}); err != nil {
+				log.Fatalf("error enabling mesh: %v", err)
+			}
+
 		} else {
 			// disable interconnect with spinner
 			if err := runWithSpinner("Disabling interconnect", func() error {
