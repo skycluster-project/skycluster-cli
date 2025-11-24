@@ -1,4 +1,4 @@
-package xkube
+package utils
 
 import (
 	"fmt"
@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-// runWithSpinner runs f() while showing a simple spinner and message on stderr.
+// RunWithSpinner runs f() while showing a simple spinner and message on stderr.
 // It returns f()'s error. The spinner writes to stderr to avoid clobbering stdout.
-func runWithSpinner(msg string, f func() error) error {
+func RunWithSpinner(msg string, f func() error) error {
 	stop := make(chan struct{})
 	spinnerDone := make(chan struct{})
 	resultCh := make(chan error, 1)

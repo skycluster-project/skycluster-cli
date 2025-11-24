@@ -48,7 +48,7 @@ var configShowCmd = &cobra.Command{
 	Short: "Show current kubeconfig of the xkube (writes to file)",
 	Run: func(cmd *cobra.Command, args []string) {
 		ns, _ := cmd.Root().PersistentFlags().GetString("namespace")
-		runWithSpinner("Fetching kubeconfigs", func() error {
+		utils.RunWithSpinner("Fetching kubeconfigs", func() error {
 			showConfigs(kubeNames, ns, outPath)
 			return nil 
 		})
@@ -68,7 +68,7 @@ func showConfigs(kubeNames []string, ns string, outPath string) {
 		clientSet:     clientSet,
 	}
 
-	if len(kubeNames) == 0 {kubeNames = listXKubesNames(ns)}
+	if len(kubeNames) == 0 {kubeNames = ListXKubesNames(ns)}
 
 	var kubeconfigs []string
 	for _, c := range kubeNames {
@@ -104,7 +104,7 @@ func showConfigs(kubeNames []string, ns string, outPath string) {
 	fmt.Fprintf(os.Stderr, "Wrote kubeconfig to %s\n", outPath)
 }
 
-func getConfig(kubeName string, ns string) (string, error) {
+func GetConfig(kubeName string, ns string) (string, error) {
 	kubeconfigPath := viper.GetString("kubeconfig")
 	dynamicClient, err1 := utils.GetDynamicClient(kubeconfigPath)
 	clientSet, err2 := utils.GetClientset(kubeconfigPath)

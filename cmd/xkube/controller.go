@@ -188,7 +188,6 @@ func (c *Controller) handleReadyXkube(obj *unstructured.Unstructured) {
 		log.Printf("error listing secrets for propagation to %s: %v", targetClusterName, err)
 		return
 	}
-	log.Printf("found %d secrets to consider for propagation to %s", len(secrets), targetClusterName)
 
 	for i := range secrets {
 		secret := secrets[i] // avoid pointer to loop var

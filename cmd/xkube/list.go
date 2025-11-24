@@ -130,7 +130,7 @@ func listXKubes(ns string) {
 }
 
 
-func listXKubesNames(ns string) []string {
+func ListXKubesNames(ns string) []string {
 	kubeconfig := viper.GetString("kubeconfig")
 	dynamicClient, err := utils.GetDynamicClient(kubeconfig)
 	if err != nil {
