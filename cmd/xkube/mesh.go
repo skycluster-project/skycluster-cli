@@ -27,7 +27,7 @@ func init() {
 // xkubeMeshCmd implements `xkube mesh --enable|--disable`
 var xkubeMeshCmd = &cobra.Command{
 	Use:   "mesh",
-	Short: "Create/Update/Delete the single XkubeMesh that references all Xkubes in the cluster",
+	Short: "Enable or disable interconnect mesh for xkube clusters",
 	Run: func(cmd *cobra.Command, args []string) {
 		enable, _ := cmd.Flags().GetBool("enable")
 		disable, _ := cmd.Flags().GetBool("disable")
