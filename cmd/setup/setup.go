@@ -146,7 +146,6 @@ var setupCmd = &cobra.Command{
 				},
 			},
 			Type: corev1.SecretTypeOpaque,
-			// we want the YAML to show the JSON config as plain string -> StringData is used
 			StringData: map[string]string{
 				"config": string(cfgBytes),
 			},
@@ -157,14 +156,13 @@ var setupCmd = &cobra.Command{
 				Namespace: ns,
 				Name:      "skycluster-management",
 				Labels: map[string]string{
-					"skycluster.io/managed-by":  "skycluster",
-					"skycluster.io/secret-type": "k8s-connection-data",
+					"skycluster.io/managed-by":   "skycluster",
+					"skycluster.io/secret-type":  "k8s-connection-data",
 					"skycluster.io/cluster-name": "skycluster-management",
 				},
 			},
 			Type: corev1.SecretTypeOpaque,
 			Data: map[string][]byte{
-				// store raw kubeconfig bytes; Kubernetes stores secret data base64-encoded
 				"kubeconfig": kubeBytes,
 			},
 		}
@@ -180,7 +178,7 @@ var setupCmd = &cobra.Command{
 
 		ctx := context.Background()
 
-		// Ensure namespace exists (best effort; ignore AlreadyExists)
+		// Ensure namespaces exist (best effort; ignore AlreadyExists)
 		debugf("ensuring namespace %s exists", ns)
 		if err := createOrUpdateNamespace(ctx, clientset, ns); err != nil {
 			debugf("createOrUpdateNamespace failed for %s: %v", ns, err)
@@ -228,6 +226,107 @@ var setupCmd = &cobra.Command{
 		}
 
 		fmt.Println("Secrets created/updated successfully and XSetup ensured")
+
+		// --------------------------------------------------------------------
+		// PRE-WATCH PHASE + WATCHING PROCESS FOR STATICALLY DEFINED RESOURCES
+		// --------------------------------------------------------------------
+		fmt.Println("Resolving resources to watch (pre-watch phase)...")
+
+		// These specs use the *underlying* manifest name (spec.forProvider.manifest.metadata.name),
+		// which we know, but not the Crossplane object name itself.
+		// So Name is left empty and ManifestMetadataName is used to resolve it.
+		watchList := []utils.WaitResourceSpec{
+			{
+				KindDescription: "Istio root CA certs generator",
+				GVR: schema.GroupVersionResource{
+					Group:    "kubernetes.crossplane.io",
+					Version:  "v1alpha2",
+					Resource: "objects",
+				},
+				ManifestMetadataName: "istio-root-ca-certs-generator", // == spec.forProvider.manifest.metadata.name
+				ConditionType:        "Ready",
+				Timeout:              1 * time.Minute,
+				PollInterval:         5 * time.Second,
+			},
+			{
+				KindDescription: "Headscale cert generator",
+				GVR: schema.GroupVersionResource{
+					Group:    "kubernetes.crossplane.io",
+					Version:  "v1alpha2",
+					Resource: "objects",
+				},
+				ManifestMetadataName: "headscale-cert-gen",
+				ConditionType:        "Ready",
+				Timeout:              3 * time.Minute,
+				PollInterval:         10 * time.Second,
+			},
+			{
+				KindDescription: "Headscale server",
+				GVR: schema.GroupVersionResource{
+					Group:    "kubernetes.crossplane.io",
+					Version:  "v1alpha2",
+					Resource: "objects",
+				},
+				ManifestMetadataName: "headscale-server",
+				ConditionType:        "Ready",
+				Timeout:              5 * time.Minute,
+				PollInterval:         10 * time.Second,
+			},
+			{
+				KindDescription: "Headscale connection secret",
+				GVR: schema.GroupVersionResource{
+					Group:    "kubernetes.crossplane.io",
+					Version:  "v1alpha2",
+					Resource: "objects",
+				},
+				ManifestMetadataName: "headscale-connection-secret",
+				ConditionType:        "Ready",
+				Timeout:              2 * time.Minute,
+				PollInterval:         5 * time.Second,
+			},
+			// For these Helm releases we *do* know the name directly.
+			{
+				KindDescription: "Submariner Operator Release",
+				GVR: schema.GroupVersionResource{
+					Group:    "helm.crossplane.io",
+					Version:  "v1beta1",
+					Resource: "releases",
+				},
+				ManifestMetadataName: "submariner-k8s-broker",
+				ConditionType: "Ready",
+				Timeout:       4 * time.Minute,
+				PollInterval:  10 * time.Second,
+			},
+			{
+				KindDescription: "Submariner operator",
+				GVR: schema.GroupVersionResource{
+					Group:    "helm.crossplane.io",
+					Version:  "v1beta1",
+					Resource: "releases",
+				},
+				ManifestMetadataName: "submariner-operator",
+				ConditionType: "Ready",
+				Timeout:       4 * time.Minute,
+				PollInterval:  10 * time.Second,
+			},
+		}
+
+		// Pre-watch phase: resolve names via spec.forProvider.manifest.metadata.name
+		if err := utils.ResolveResourceNamesFromManifest(ctx, dyn, watchList, debugf); err != nil {
+			return fmt.Errorf("pre-watch resolution failed: %w", err)
+		}
+
+		fmt.Println("Waiting for required resources to become Ready...")
+
+		// Use utils.WaitForResourcesReadySequential
+		printFn := func(format string, args ...interface{}) {
+			fmt.Printf(format, args...)
+		}
+		if err := utils.WaitForResourcesReadySequential(ctx, dyn, watchList, printFn, debugf); err != nil {
+			return err
+		}
+
+		fmt.Println("All required resources became Ready.")
 		return nil
 	},
 }
@@ -292,9 +391,7 @@ func createOrUpdateNamespace(ctx context.Context, c *kubernetes.Clientset, ns st
 	return nil
 }
 
-// buildXSetupUnstructured builds an unstructured.Unstructured representing the XSetup CR shown:
-// apiVersion: skycluster.io/v1alpha1
-// kind: XSetup
+// buildXSetupUnstructured builds an unstructured.Unstructured representing the XSetup CR.
 func buildXSetupUnstructured(name, apiServer string, submarinerEnabled bool) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -364,9 +461,7 @@ func createOrUpdateXSetup(ctx context.Context, dyn dynamic.Interface, u *unstruc
 	return err
 }
 
-// mergeMaps overlays src onto dst recursively. For keys where both dst and src are maps,
-// the merge is performed recursively. Other values from src overwrite dst. dst is mutated
-// and returned as the resulting map.
+// mergeMaps overlays src onto dst recursively.
 func mergeMaps(dst, src map[string]interface{}) map[string]interface{} {
 	if dst == nil {
 		dst = make(map[string]interface{})
@@ -398,7 +493,6 @@ func mergeMaps(dst, src map[string]interface{}) map[string]interface{} {
 }
 
 // validateAndCheckAPIServer validates the apiServer string and checks reachability and basic Kubernetes API validity.
-// Returns the normalized apiServer (host:port), a bool indicating whether InsecureSkipVerify was used, and error.
 func validateAndCheckAPIServer(apiServer string) (string, bool, error) {
 	apiServer = strings.TrimSpace(apiServer)
 	debugf("validateAndCheckAPIServer input: %q", apiServer)
@@ -422,7 +516,6 @@ func validateAndCheckAPIServer(apiServer string) (string, bool, error) {
 		_, err := net.LookupHost(host)
 		if err != nil {
 			debugf("DNS lookup for host %q failed (non-fatal here): %v", host, err)
-			// we'll still attempt an HTTP check; don't fail here outright
 		} else {
 			debugf("DNS lookup for host %q succeeded", host)
 		}
@@ -447,7 +540,6 @@ func validateAndCheckAPIServer(apiServer string) (string, bool, error) {
 			return normalized, insecureUsed2, nil
 		}
 		debugf("probe with insecure also failed for %s: %v", url, err2)
-		// return earlier error context (combine)
 		return "", false, fmt.Errorf("failed to contact API server %s: %v; retry with insecure: %v", normalized, err, err2)
 	}
 	debugf("api server %s did not present a valid Kubernetes version response", normalized)
@@ -466,7 +558,6 @@ func normalizeHostPort(raw, defaultPort string) string {
 		return raw
 	}
 	// If error, it may be missing port. Append default.
-	// If raw contains IPv6 in brackets with port omitted, we still append default.
 	if strings.Contains(raw, ":") && strings.Count(raw, ":") > 1 && !strings.HasPrefix(raw, "[") {
 		// IPv6 address without brackets, wrap in brackets
 		raw = "[" + raw + "]"
@@ -477,7 +568,6 @@ func normalizeHostPort(raw, defaultPort string) string {
 }
 
 // probeKubernetesVersionURL GETs the /version endpoint and verifies JSON contains gitVersion.
-// If insecure is true, TLS verification will be skipped. Returns (ok, insecureUsed, err)
 func probeKubernetesVersionURL(url string, insecure bool) (bool, bool, error) {
 	debugf("probeKubernetesVersionURL: url=%q insecure=%v", url, insecure)
 	client := &http.Client{
@@ -514,7 +604,6 @@ func probeKubernetesVersionURL(url string, insecure bool) (bool, bool, error) {
 		debugf("invalid JSON from %s: %v", url, err)
 		return false, insecure, fmt.Errorf("invalid JSON from %s: %w", url, err)
 	}
-	// Kubernetes /version returns fields like "gitVersion"
 	if _, ok := parsed["gitVersion"]; !ok {
 		debugf("response from %s missing gitVersion field; parsed keys: %v", url, mapKeys(parsed))
 		return false, insecure, fmt.Errorf("response from %s missing gitVersion field", url)
@@ -534,7 +623,6 @@ func expandPath(p string) string {
 			debugf("expandPath: failed to determine user home dir: %v", err)
 			return p
 		}
-		// If p is exactly "~", TrimPrefix will return "", and Join will return home
 		out := strings.Replace(p, "~", home, 1)
 		debugf("expandPath: %q -> %q", p, out)
 		return out
