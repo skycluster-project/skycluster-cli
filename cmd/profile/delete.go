@@ -23,7 +23,7 @@ import (
 var pNames []string
 
 func init() {
-	profileDeleteCmd.PersistentFlags().StringSliceVarP(&pNames, "profile-name", "p", nil, "Profile Names, seperated by comma")
+	profileDeleteCmd.PersistentFlags().StringSliceVarP(&pNames, "name", "n", nil, "Profile Names, seperated by comma")
 }
 
 var profileDeleteCmd = &cobra.Command{

@@ -66,16 +66,18 @@ func SetDebug(d bool) {
 var setupCmd = &cobra.Command{
 	Use:   "setup",
 	Short: "Setup commands",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	Run: func(cmd *cobra.Command, args []string) {
 		debugf("setup command started")
 		// Validate required flags
 		if publicKeyPath == "" || privateKeyPath == "" {
 			debugf("missing required key paths: public=%q private=%q", publicKeyPath, privateKeyPath)
-			return errors.New("flags --public, --private are required")
+			fmt.Fprintln(os.Stderr, "error: flags --public and --private are required")
+			os.Exit(1)
 		}
 		if strings.TrimSpace(xsetupAPIServer) == "" {
 			debugf("missing required apiserver flag")
-			return errors.New("flag --apiserver is required")
+			fmt.Fprintln(os.Stderr, "error: flag --apiserver is required")
+			os.Exit(1)
 		}
 
 		debugf("validating api server %q", xsetupAPIServer)
@@ -83,7 +85,8 @@ var setupCmd = &cobra.Command{
 		apiServerNormalized, insecureUsed, err := validateAndCheckAPIServer(xsetupAPIServer)
 		if err != nil {
 			debugf("api server validation failed: %v", err)
-			return fmt.Errorf("api server validation failed: %w", err)
+			fmt.Fprintf(os.Stderr, "error: api server validation failed: %v\n", err)
+			os.Exit(1)
 		}
 		if insecureUsed {
 			debugf("API server probe required insecure TLS skip (InsecureSkipVerify=true)")
@@ -96,7 +99,8 @@ var setupCmd = &cobra.Command{
 		pubBytes, err := os.ReadFile(expandPath(publicKeyPath))
 		if err != nil {
 			debugf("failed reading public key: %v", err)
-			return fmt.Errorf("reading public key: %w", err)
+			fmt.Fprintf(os.Stderr, "error: reading public key: %v\n", err)
+			os.Exit(1)
 		}
 		debugf("read %d bytes from public key", len(pubBytes))
 
@@ -104,7 +108,8 @@ var setupCmd = &cobra.Command{
 		privBytes, err := os.ReadFile(expandPath(privateKeyPath))
 		if err != nil {
 			debugf("failed reading private key: %v", err)
-			return fmt.Errorf("reading private key: %w", err)
+			fmt.Fprintf(os.Stderr, "error: reading private key: %v\n", err)
+			os.Exit(1)
 		}
 		debugf("read %d bytes from private key", len(privBytes))
 
@@ -113,7 +118,8 @@ var setupCmd = &cobra.Command{
 		kubeBytes, err := os.ReadFile(expandPath(kubeconfigPath))
 		if err != nil {
 			debugf("failed reading kubeconfig: %v", err)
-			return fmt.Errorf("reading kubeconfig: %w", err)
+			fmt.Fprintf(os.Stderr, "error: reading kubeconfig: %v\n", err)
+			os.Exit(1)
 		}
 		debugf("read %d bytes from kubeconfig", len(kubeBytes))
 
@@ -130,7 +136,8 @@ var setupCmd = &cobra.Command{
 		cfgBytes, err := json.Marshal(cfg)
 		if err != nil {
 			debugf("failed to marshal keypair json: %v", err)
-			return fmt.Errorf("marshal keypair json: %w", err)
+			fmt.Fprintf(os.Stderr, "error: marshal keypair json: %v\n", err)
+			os.Exit(1)
 		}
 		debugf("marshalled keypair json (%d bytes)", len(cfgBytes))
 
@@ -172,7 +179,8 @@ var setupCmd = &cobra.Command{
 		clientset, err := utils.GetClientset(kubeconfigPath)
 		if err != nil {
 			debugf("failed to build kubernetes clientset: %v", err)
-			return fmt.Errorf("build kubernetes client: %w", err)
+			fmt.Fprintf(os.Stderr, "error: build kubernetes clientset: %v\n", err)
+			os.Exit(1)
 		}
 		debugf("kubernetes clientset initialized")
 
@@ -182,25 +190,29 @@ var setupCmd = &cobra.Command{
 		debugf("ensuring namespace %s exists", ns)
 		if err := createOrUpdateNamespace(ctx, clientset, ns); err != nil {
 			debugf("createOrUpdateNamespace failed for %s: %v", ns, err)
-			return fmt.Errorf("ensure namespace %s: %w", ns, err)
+			fmt.Fprintf(os.Stderr, "error: ensure namespace %s: %v\n", ns, err)
+			os.Exit(1)
 		}
 		debugf("ensuring namespace %s exists", "submariner-operator")
 		if err := createOrUpdateNamespace(ctx, clientset, "submariner-operator"); err != nil {
 			debugf("createOrUpdateNamespace failed for submariner-operator: %v", err)
-			return fmt.Errorf("ensure namespace %s: %w", "submariner-operator", err)
+			fmt.Fprintf(os.Stderr, "error: ensure namespace %s: %v\n", "submariner-operator", err)
+			os.Exit(1)
 		}
 
 		debugf("creating/updating secret %s/%s", secret1.Namespace, secret1.Name)
 		if err := createOrUpdateSecret(ctx, clientset, secret1); err != nil {
 			debugf("createOrUpdateSecret failed for %s: %v", secret1.Name, err)
-			return fmt.Errorf("create/update secret %s: %w", secret1.Name, err)
+			fmt.Fprintf(os.Stderr, "error: create/update secret %s: %v\n", secret1.Name, err)
+			os.Exit(1)
 		}
 		debugf("created/updated secret %s/%s", secret1.Namespace, secret1.Name)
 
 		debugf("creating/updating secret %s/%s", secret2.Namespace, secret2.Name)
 		if err := createOrUpdateSecret(ctx, clientset, secret2); err != nil {
 			debugf("createOrUpdateSecret failed for %s: %v", secret2.Name, err)
-			return fmt.Errorf("create/update secret %s: %w", secret2.Name, err)
+			fmt.Fprintf(os.Stderr, "error: create/update secret %s: %v\n", secret2.Name, err)
+			os.Exit(1)
 		}
 		debugf("created/updated secret %s/%s", secret2.Namespace, secret2.Name)
 
@@ -209,7 +221,8 @@ var setupCmd = &cobra.Command{
 		dyn, err := utils.GetDynamicClient(kubeconfigPath)
 		if err != nil {
 			debugf("failed to build dynamic client: %v", err)
-			return fmt.Errorf("build dynamic client: %w", err)
+			fmt.Fprintf(os.Stderr, "error: build dynamic client: %v\n", err)
+			os.Exit(1)
 		}
 		debugf("dynamic client initialized")
 
@@ -222,15 +235,16 @@ var setupCmd = &cobra.Command{
 		}
 		if err := createOrUpdateXSetup(ctx, dyn, xsetup); err != nil {
 			debugf("createOrUpdateXSetup failed for %s: %v", xsetup.GetName(), err)
-			return fmt.Errorf("create/update XSetup %s: %w", xsetup.GetName(), err)
+			fmt.Fprintf(os.Stderr, "error: create/update XSetup %s: %v\n", xsetup.GetName(), err)
+			os.Exit(1)
 		}
 
-		fmt.Println("Secrets created/updated successfully and XSetup ensured")
+		fmt.Println("Setup initiated successfully. Waiting for resources to become ready...")
 
 		// --------------------------------------------------------------------
 		// PRE-WATCH PHASE + WATCHING PROCESS FOR STATICALLY DEFINED RESOURCES
 		// --------------------------------------------------------------------
-		fmt.Println("Resolving resources to watch (pre-watch phase)...")
+		debugf("Resolving resources to watch (pre-watch phase)...")
 
 		// These specs use the *underlying* manifest name (spec.forProvider.manifest.metadata.name),
 		// which we know, but not the Crossplane object name itself.
@@ -345,27 +359,29 @@ var setupCmd = &cobra.Command{
 			}
 			// Pre-watch phase: resolve names via spec.forProvider.manifest.metadata.name
 			if err := utils.ResolveResourceNamesFromManifest(ctx, dyn, watchList, debugf); err != nil {
-				return fmt.Errorf("pre-watch resolution failed: %w", err)
+				fmt.Fprintf(os.Stderr, "error: pre-watch resolution failed: %v\n", err)
+				os.Exit(1)
 			}
 
 			if err := utils.WaitForResourcesReadySequential(ctx, dyn, watchList, plainSink, debugf); err != nil {
-				return err
+				fmt.Fprintf(os.Stderr, "error: waiting for resources ready: %v\n", err)
+				os.Exit(1)
 			}
-			return nil
 		}
 
 		// Pre-watch phase: resolve names via spec.forProvider.manifest.metadata.name
 		if err := utils.ResolveResourceNamesFromManifest(ctx, dyn, watchList, debugf); err != nil {
-			return fmt.Errorf("pre-watch resolution failed: %w", err)
+			fmt.Fprintf(os.Stderr, "error: pre-watch resolution failed: %v\n", err)
+			os.Exit(1)
 		}
 		
 		// Use the TUI renderer as the ProgressSink
 		err = utils.WaitForResourcesReadySequential(ctx, dyn, watchList, renderer.Sink, debugf)
 		renderer.Stop(err)
 		if err != nil {
-				return err
+			fmt.Fprintf(os.Stderr, "error: waiting for resources ready: %v\n", err)
+			os.Exit(1)
 		}
-		return nil
 	},
 }
 

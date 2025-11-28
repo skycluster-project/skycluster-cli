@@ -149,6 +149,11 @@ func extractManifestName(obj map[string]interface{}, resource string) (string, e
 			obj, "spec", "forProvider", "chart", "name",
 		)
 		return name, nil
+	case "instancetypes", "images":
+		name, _, _ := unstructured.NestedString(
+			obj, "metadata", "generateName",
+		)
+		return name, nil
 	default:
 		return "", fmt.Errorf("unsupported GVR resource %s for resolving manifest name", resource)
 	}

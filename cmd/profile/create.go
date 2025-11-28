@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -124,7 +125,96 @@ var profileCreateCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
+		ctx := cmd.Context()
+
 		fmt.Fprintf(os.Stdout, "ProviderProfile %s ensured successfully\n", u.GetName())
+		watchList := []utils.WaitResourceSpec{
+			{
+				KindDescription: "Instance Types",
+				GVR: schema.GroupVersionResource{
+					Group:    "core.skycluster.io",
+					Version:  "v1alpha1",
+					Resource: "instancetypes",
+				},
+				ManifestMetadataName: resourceName + "-",
+				Namespace: "skycluster-system",
+				ConditionType:        "Ready",
+				Timeout:              10 * time.Minute,
+				PollInterval:         5 * time.Second,
+			},
+			{
+				KindDescription: "Images",
+				GVR: schema.GroupVersionResource{
+					Group:    "core.skycluster.io",
+					Version:  "v1alpha1",
+					Resource: "images",
+				},
+				Namespace: "skycluster-system",
+				ManifestMetadataName: resourceName + "-",
+				ConditionType:        "Ready",
+				Timeout:              10 * time.Minute,
+				PollInterval:         5 * time.Second,
+			},
+		}
+
+		// Create and start TUI renderer
+		renderer := utils.NewTUIRenderer()
+		if err := renderer.Start(); err != nil {
+			// fallback to plain output if TUI fails
+			fmt.Printf("Failed to start TUI renderer: %v\n", err)
+			// simple fallback ProgressSink
+			plainSink := func(ev utils.ProgressEvent) {
+        if ev.Err != nil {
+            fmt.Printf("[ERROR] %s (%s/%s %s): %v\n",
+                ev.KindDescription,
+                ev.Namespace,
+                ev.Name,
+                ev.GVR.Resource,
+                ev.Err,
+            )
+            return
+        }
+        status := "waiting"
+        if ev.ResourceCompleted {
+            status = "ready"
+        }
+        fmt.Printf("[%.0f%%] (%d/%d) %-30s %-6s %s/%s %s\n",
+            ev.OverallPercent,
+            ev.CurrentIndex,
+            ev.Total,
+            ev.KindDescription,
+            status,
+            ev.Namespace,
+            ev.Name,
+            ev.GVR.Resource,
+        )
+			}
+			
+			// Pre-watch phase: resolve names via spec.forProvider.manifest.metadata.name
+			if err := utils.ResolveResourceNamesFromManifest(ctx, dyn, watchList, debugf); err != nil {
+				fmt.Fprintf(os.Stderr, "error: pre-watch resolution failed: %v\n", err)
+				os.Exit(1)
+			}
+
+			if err := utils.WaitForResourcesReadySequential(ctx, dyn, watchList, plainSink, debugf); err != nil {
+				fmt.Fprintf(os.Stderr, "error: waiting for resources ready: %v\n", err)
+				os.Exit(1)
+			}
+		}
+
+		// Pre-watch phase: resolve names via spec.forProvider.manifest.metadata.name
+		if err := utils.ResolveResourceNamesFromManifest(ctx, dyn, watchList, debugf); err != nil {
+			fmt.Fprintf(os.Stderr, "error: pre-watch resolution failed: %v\n", err)
+			os.Exit(1)
+		}
+		
+		// Use the TUI renderer as the ProgressSink
+		err = utils.WaitForResourcesReadySequential(ctx, dyn, watchList, renderer.Sink, debugf)
+		renderer.Stop(err)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: waiting for resources ready: %v\n", err)
+			os.Exit(1)
+		}
 	},
 }
 
