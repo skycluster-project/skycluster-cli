@@ -245,6 +245,7 @@ var setupCmd = &cobra.Command{
 		// PRE-WATCH PHASE + WATCHING PROCESS FOR STATICALLY DEFINED RESOURCES
 		// --------------------------------------------------------------------
 		debugf("Resolving resources to watch (pre-watch phase)...")
+		time.Sleep(3 * time.Second) // brief pause before starting watch
 
 		// These specs use the *underlying* manifest name (spec.forProvider.manifest.metadata.name),
 		// which we know, but not the Crossplane object name itself.

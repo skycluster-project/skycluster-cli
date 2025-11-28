@@ -128,20 +128,8 @@ var profileCreateCmd = &cobra.Command{
 		ctx := cmd.Context()
 
 		fmt.Fprintf(os.Stdout, "ProviderProfile %s ensured successfully\n", u.GetName())
+		time.Sleep(3 * time.Second) // brief pause before starting watch
 		watchList := []utils.WaitResourceSpec{
-			{
-				KindDescription: "Instance Types",
-				GVR: schema.GroupVersionResource{
-					Group:    "core.skycluster.io",
-					Version:  "v1alpha1",
-					Resource: "instancetypes",
-				},
-				ManifestMetadataName: resourceName + "-",
-				Namespace: "skycluster-system",
-				ConditionType:        "Ready",
-				Timeout:              10 * time.Minute,
-				PollInterval:         5 * time.Second,
-			},
 			{
 				KindDescription: "Images",
 				GVR: schema.GroupVersionResource{
@@ -151,6 +139,19 @@ var profileCreateCmd = &cobra.Command{
 				},
 				Namespace: "skycluster-system",
 				ManifestMetadataName: resourceName + "-",
+				ConditionType:        "Ready",
+				Timeout:              10 * time.Minute,
+				PollInterval:         5 * time.Second,
+			},
+			{
+				KindDescription: "Instance Types",
+				GVR: schema.GroupVersionResource{
+					Group:    "core.skycluster.io",
+					Version:  "v1alpha1",
+					Resource: "instancetypes",
+				},
+				ManifestMetadataName: resourceName + "-",
+				Namespace: "skycluster-system",
 				ConditionType:        "Ready",
 				Timeout:              10 * time.Minute,
 				PollInterval:         5 * time.Second,
