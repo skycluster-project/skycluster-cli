@@ -311,22 +311,60 @@ var setupCmd = &cobra.Command{
 			},
 		}
 
+		// Create and start TUI renderer
+		renderer := utils.NewTUIRenderer()
+		if err := renderer.Start(); err != nil {
+			// fallback to plain output if TUI fails
+			fmt.Printf("Failed to start TUI renderer: %v\n", err)
+			// simple fallback ProgressSink
+			plainSink := func(ev utils.ProgressEvent) {
+        if ev.Err != nil {
+            fmt.Printf("[ERROR] %s (%s/%s %s): %v\n",
+                ev.KindDescription,
+                ev.Namespace,
+                ev.Name,
+                ev.GVR.Resource,
+                ev.Err,
+            )
+            return
+        }
+        status := "waiting"
+        if ev.ResourceCompleted {
+            status = "ready"
+        }
+        fmt.Printf("[%.0f%%] (%d/%d) %-30s %-6s %s/%s %s\n",
+            ev.OverallPercent,
+            ev.CurrentIndex,
+            ev.Total,
+            ev.KindDescription,
+            status,
+            ev.Namespace,
+            ev.Name,
+            ev.GVR.Resource,
+        )
+			}
+			// Pre-watch phase: resolve names via spec.forProvider.manifest.metadata.name
+			if err := utils.ResolveResourceNamesFromManifest(ctx, dyn, watchList, debugf); err != nil {
+				return fmt.Errorf("pre-watch resolution failed: %w", err)
+			}
+
+			if err := utils.WaitForResourcesReadySequential(ctx, dyn, watchList, plainSink, debugf); err != nil {
+				return err
+			}
+			return nil
+		}
+
 		// Pre-watch phase: resolve names via spec.forProvider.manifest.metadata.name
 		if err := utils.ResolveResourceNamesFromManifest(ctx, dyn, watchList, debugf); err != nil {
 			return fmt.Errorf("pre-watch resolution failed: %w", err)
 		}
-
-		fmt.Println("Waiting for required resources to become Ready...")
-
-		// Use utils.WaitForResourcesReadySequential
-		printFn := func(format string, args ...interface{}) {
-			fmt.Printf(format, args...)
+		
+		// Use the TUI renderer as the ProgressSink
+		err = utils.WaitForResourcesReadySequential(ctx, dyn, watchList, renderer.Sink, debugf)
+		renderer.Stop(err)
+		if err != nil {
+				return err
 		}
-		if err := utils.WaitForResourcesReadySequential(ctx, dyn, watchList, printFn, debugf); err != nil {
-			return err
-		}
-
-		fmt.Println("All required resources became Ready.")
 		return nil
 	},
 }

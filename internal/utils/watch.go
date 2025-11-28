@@ -13,17 +13,47 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
-// DebugfFunc is a function type used for debug logging. The caller (e.g. setup package)
-// can provide its own implementation (or nil to disable).
+// DebugfFunc is a function type used for debug logging. The caller can provide
+// its own implementation (or nil to disable).
 type DebugfFunc func(format string, args ...interface{})
 
-// WaitResourceSpec defines a resource that should become Ready=True (or any condition) in order.
+// ProgressSink is a callback used to report progress in a more "modern/dynamic"
+// way. You can plug this into a TUI, spinner, etc.
+type ProgressSink func(ev ProgressEvent)
+
+// ProgressEvent describes the current state of the waiting process.
+type ProgressEvent struct {
+	// Human-readable description of what we're waiting for.
+	Message string
+
+	// Index of the current resource (1-based) and total resources.
+	CurrentIndex int
+	Total        int
+
+	// Overall progress in percent [0,100].
+	OverallPercent float64
+
+	// Name and kind of the current resource.
+	KindDescription string
+	Namespace       string
+	Name            string
+	GVR             schema.GroupVersionResource
+
+	// True when this particular resource just became Ready.
+	ResourceCompleted bool
+
+	// Error, if any, associated with this progress update.
+	Err error
+}
+
+// WaitResourceSpec defines a resource that should become Ready=True (or any
+// other condition) in order.
 type WaitResourceSpec struct {
 	KindDescription       string
 	GVR                  schema.GroupVersionResource
 	Namespace            string
 	Name                 string        // resolved name of the Crossplane object / resource
-	ManifestMetadataName string        // spec.forProvider.manifest.metadata.name when Name is unknown
+	ManifestMetadataName string        // when Name is unknown
 	ConditionType        string        // e.g. "Ready", "Available"
 	Timeout              time.Duration // overall timeout per resource
 	PollInterval         time.Duration // polling interval
@@ -32,8 +62,7 @@ type WaitResourceSpec struct {
 // ResolveResourceNamesFromManifest performs the "pre-watch phase":
 // For each spec where Name is empty and ManifestMetadataName is set, it lists
 // the resources of that GVR (and namespace, if set) and finds the one whose
-// spec.forProvider.manifest.metadata.name == ManifestMetadataName,
-// then fills spec.Name in-place.
+// manifest-derived name matches ManifestMetadataName, then fills spec.Name.
 func ResolveResourceNamesFromManifest(
 	ctx context.Context,
 	dyn dynamic.Interface,
@@ -43,12 +72,11 @@ func ResolveResourceNamesFromManifest(
 	for i := range resources {
 		spec := &resources[i]
 		if spec.Name != "" || spec.ManifestMetadataName == "" {
-			// nothing to resolve
 			continue
 		}
 
 		if debugf != nil {
-			debugf("pre-watch: resolving %s via spec.forProvider.manifest.metadata.name=%q in %s %s",
+			debugf("pre-watch: resolving %s via manifest name=%q in %s %s",
 				spec.KindDescription,
 				spec.ManifestMetadataName,
 				spec.GVR.Resource,
@@ -58,8 +86,10 @@ func ResolveResourceNamesFromManifest(
 
 		resClient := dyn.Resource(spec.GVR)
 
-		var list *unstructured.UnstructuredList
-		var err error
+		var (
+			list *unstructured.UnstructuredList
+			err  error
+		)
 		if spec.Namespace == "" {
 			list, err = resClient.List(ctx, meta.ListOptions{})
 		} else {
@@ -70,25 +100,15 @@ func ResolveResourceNamesFromManifest(
 		}
 
 		foundName := ""
-		manifestName := ""
 		for _, item := range list.Items {
-			switch spec.GVR.Resource {
-			case "objects":
-				manifestName, _, _ = unstructured.NestedString(
-					item.Object, "spec", "forProvider", "manifest", "metadata", "name",
-				)
-			case "releases":
-				manifestName, _, _ = unstructured.NestedString(
-					item.Object, "spec", "forProvider", "chart", "name",
-				)
-			// Add more resource types here as needed
-			default:
-				return fmt.Errorf("unsupported GVR resource %s for resolving manifest name", spec.GVR.Resource)
+			manifestName, err := extractManifestName(item.Object, spec.GVR.Resource)
+			if err != nil {
+				return fmt.Errorf("extract manifest name for %s: %w", spec.KindDescription, err)
 			}
 			if manifestName == spec.ManifestMetadataName {
 				foundName = item.GetName()
 				if debugf != nil {
-					debugf("pre-watch: %s matched Crossplane object %s/%s (manifest.metadata.name=%q)",
+					debugf("pre-watch: %s matched Crossplane object %s/%s (manifest name=%q)",
 						spec.KindDescription,
 						item.GetNamespace(),
 						item.GetName(),
@@ -101,7 +121,7 @@ func ResolveResourceNamesFromManifest(
 
 		if foundName == "" {
 			return fmt.Errorf(
-				"could not resolve Crossplane object name for %s (GVR=%s, ns=%s, manifest.metadata.name=%q)",
+				"could not resolve object name for %s (GVR=%s, ns=%s, manifest name=%q)",
 				spec.KindDescription,
 				spec.GVR.Resource,
 				spec.Namespace,
@@ -115,20 +135,42 @@ func ResolveResourceNamesFromManifest(
 	return nil
 }
 
-// WaitForResourcesReadySequential waits for each resource in order, showing progress via printFn.
+// extractManifestName centralizes how we look up the "manifest name" for
+// different Crossplane resource types.
+func extractManifestName(obj map[string]interface{}, resource string) (string, error) {
+	switch resource {
+	case "objects":
+		name, _, _ := unstructured.NestedString(
+			obj, "spec", "forProvider", "manifest", "metadata", "name",
+		)
+		return name, nil
+	case "releases":
+		name, _, _ := unstructured.NestedString(
+			obj, "spec", "forProvider", "chart", "name",
+		)
+		return name, nil
+	default:
+		return "", fmt.Errorf("unsupported GVR resource %s for resolving manifest name", resource)
+	}
+}
+
+// WaitForResourcesReadySequential waits for each resource in order and reports
+// progress via progressSink. This is designed to be "dynamic" and can back a
+// TUI, spinner, or any modern progress view.
 func WaitForResourcesReadySequential(
 	parentCtx context.Context,
 	dyn dynamic.Interface,
 	resources []WaitResourceSpec,
-	printFn func(format string, args ...interface{}),
+	progressSink ProgressSink,
 	debugf DebugfFunc,
 ) error {
 	if len(resources) == 0 {
 		return nil
 	}
 
-	if printFn == nil {
-		printFn = func(string, ...interface{}) {}
+	// no-op sink if nil
+	if progressSink == nil {
+		progressSink = func(ProgressEvent) {}
 	}
 
 	total := len(resources)
@@ -136,20 +178,35 @@ func WaitForResourcesReadySequential(
 
 	for i, spec := range resources {
 		index := i + 1
-		progress := float64(completed) / float64(total) * 100
-		printFn("[%.0f%%] Waiting for %s (%d/%d): %s/%s %s\n",
-			progress,
-			spec.KindDescription,
-			index, total,
-			coalesce(spec.Namespace, "<cluster-scope>"),
-			spec.Name,
-			spec.GVR.Resource,
-		)
+		overallPercent := float64(completed) / float64(total) * 100
+
+		progressSink(ProgressEvent{
+			Message:          fmt.Sprintf("Waiting for %s", spec.KindDescription),
+			CurrentIndex:     index,
+			Total:            total,
+			OverallPercent:   overallPercent,
+			KindDescription:  spec.KindDescription,
+			Namespace:        coalesce(spec.Namespace, "<cluster-scope>"),
+			Name:             spec.Name,
+			GVR:              spec.GVR,
+			ResourceCompleted: false,
+		})
 
 		ctx, cancel := context.WithTimeout(parentCtx, spec.Timeout)
 		err := waitForSingleResourceReady(ctx, dyn, spec, debugf)
 		cancel()
 		if err != nil {
+			progressSink(ProgressEvent{
+				Message:         fmt.Sprintf("Error waiting for %s", spec.KindDescription),
+				CurrentIndex:    index,
+				Total:           total,
+				OverallPercent:  overallPercent,
+				KindDescription: spec.KindDescription,
+				Namespace:       coalesce(spec.Namespace, "<cluster-scope>"),
+				Name:            spec.Name,
+				GVR:             spec.GVR,
+				Err:             err,
+			})
 			return fmt.Errorf("resource %s (%s %s/%s) did not become %s=True: %w",
 				spec.KindDescription,
 				spec.GVR.Resource,
@@ -161,21 +218,26 @@ func WaitForResourcesReadySequential(
 		}
 
 		completed++
-		progress = float64(completed) / float64(total) * 100
-		printFn("[%.0f%%] %s is Ready: %s/%s %s\n",
-			progress,
-			spec.KindDescription,
-			coalesce(spec.Namespace, "<cluster-scope>"),
-			spec.Name,
-			spec.GVR.Resource,
-		)
+		overallPercent = float64(completed) / float64(total) * 100
+
+		progressSink(ProgressEvent{
+			Message:          fmt.Sprintf("%s is Ready", spec.KindDescription),
+			CurrentIndex:     index,
+			Total:            total,
+			OverallPercent:   overallPercent,
+			KindDescription:  spec.KindDescription,
+			Namespace:        coalesce(spec.Namespace, "<cluster-scope>"),
+			Name:             spec.Name,
+			GVR:              spec.GVR,
+			ResourceCompleted: true,
+		})
 	}
 
 	return nil
 }
 
-// waitForSingleResourceReady polls a single resource until the given condition is True.
-// IMPORTANT: the first GET happens immediately, without waiting for PollInterval.
+// waitForSingleResourceReady polls a single resource until the given condition
+// is True. The first GET happens immediately (no wait).
 func waitForSingleResourceReady(
 	ctx context.Context,
 	dyn dynamic.Interface,
