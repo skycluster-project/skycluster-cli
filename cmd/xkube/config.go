@@ -47,7 +47,7 @@ var configShowCmd = &cobra.Command{
 	Use:   "config",
 	Short: "Show current kubeconfig of the xkube (writes to file)",
 	Run: func(cmd *cobra.Command, args []string) {
-		ns, _ := cmd.Root().PersistentFlags().GetString("namespace")
+		ns := "skycluster-system"
 		utils.RunWithSpinner("Fetching kubeconfigs", func() error {
 			showConfigs(kubeNames, ns, outPath)
 			return nil 

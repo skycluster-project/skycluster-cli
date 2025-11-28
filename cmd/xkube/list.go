@@ -26,11 +26,7 @@ var xKubeListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List XKube",
 	Run: func(cmd *cobra.Command, args []string) {
-		ns, err := cmd.Root().PersistentFlags().GetString("namespace")
-		if err != nil {
-			log.Fatalf("error getting namespace: %v", err)
-			return
-		}
+		ns := "skycluster-system"
 		if *watchFlag {
 			watchXKubes(ns)
 			return

@@ -27,11 +27,7 @@ var xProviderListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List XProviders",
 	Run: func(cmd *cobra.Command, args []string) {
-		ns, err := cmd.Root().PersistentFlags().GetString("namespace")
-		if err != nil {
-			log.Fatalf("error getting namespace: %v", err)
-			return
-		}
+		ns := "skycluster-system"
 		if *watchFlag {
 			watchXProviders(ns)
 			return

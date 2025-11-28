@@ -25,11 +25,7 @@ var profileListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List ProviderProfiles",
 	Run: func(cmd *cobra.Command, args []string) {
-		ns, err := cmd.Root().PersistentFlags().GetString("namespace")
-		if err != nil {
-			log.Fatalf("error getting namespace: %v", err)
-			return
-		}
+		ns := "skycluster-system"
 		if *watchFlag {
 			watchProviderProfiles(ns)
 			return
@@ -112,7 +108,7 @@ func listProviderProfiles(ns string) {
 
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 4, ' ', 0)
 	if len(resources.Items) == 0 {
-		fmt.Printf("No ProviderProfiles found in the namespace [%s]\n", ns)
+		fmt.Printf("No ProviderProfiles found.\n")
 		return
 	} else {
 		fmt.Fprintln(writer, "NAME\tPLATFORM\tREGION\tREADY")

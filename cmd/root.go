@@ -8,9 +8,9 @@ import (
 	pp "github.com/etesami/skycluster-cli/cmd/profile"
 	st "github.com/etesami/skycluster-cli/cmd/setup"
 	sub "github.com/etesami/skycluster-cli/cmd/subnet"
-	sv "github.com/etesami/skycluster-cli/cmd/xinstance"
-	ks "github.com/etesami/skycluster-cli/cmd/xkube"
-	sp "github.com/etesami/skycluster-cli/cmd/xprovider"
+	in "github.com/etesami/skycluster-cli/cmd/xinstance"
+	k8 "github.com/etesami/skycluster-cli/cmd/xkube"
+	pv "github.com/etesami/skycluster-cli/cmd/xprovider"
 
 	homedir "github.com/mitchellh/go-homedir"
 	"github.com/spf13/cobra"
@@ -19,6 +19,7 @@ import (
 
 var cfgFile string
 var ns string
+var debug bool
 
 var rootCmd = &cobra.Command{
 	Short: "SkyCluster Cli is a tool to interact with SkyCluster API",
@@ -39,15 +40,16 @@ func init() {
 	cobra.OnInitialize(initConfig)
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file")
 	rootCmd.PersistentFlags().StringVar(&ns, "namespace", "", "namespace")
+	rootCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "Enable debug logging")
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	// rootCmd.AddCommand(dp.GetDependencyCmd())
 	// rootCmd.AddCommand(ovl.GetOverlayCmd())
 
 	rootCmd.AddCommand(st.GetSetupCmd())
 	rootCmd.AddCommand(pp.GetProfileCmd())
-	rootCmd.AddCommand(sp.GetXProviderCmd())
-	rootCmd.AddCommand(sv.GetXInstanceCmd())
-	rootCmd.AddCommand(ks.GetXKubeCmd())
+	rootCmd.AddCommand(pv.GetXProviderCmd())
+	rootCmd.AddCommand(in.GetXInstanceCmd())
+	rootCmd.AddCommand(k8.GetXKubeCmd())
 	rootCmd.AddCommand(sub.GetSubnetCmd())
 	rootCmd.AddCommand(cl.GetCleanupCmd())
 }
@@ -76,10 +78,11 @@ func initConfig() {
 		os.Exit(1)
 	}
 
-	// // Bind CLI flags to viper keys
-	// _ = viper.BindPFlag("namespace", rootCmd.PersistentFlags().Lookup("namespace"))
-	// // If namespace flag not provided, read from config
-	// if ns == "" {
-	// 	ns = viper.GetString("namespace")
-	// }
+	pp.SetDebug(debug)
+	st.SetDebug(debug)
+	in.SetDebug(debug)
+	pv.SetDebug(debug)
+	k8.SetDebug(debug)
+	cl.SetDebug(debug)
+	// sub.SetDebug(debug)
 }

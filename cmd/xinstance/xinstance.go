@@ -4,6 +4,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// debug controls debug output. Tests or a caller can set this to true.
+var debug bool
+
 func init() {
 	// xInstanceCmd.AddCommand(flavor.GetFlavorCmd())
 	// xInstanceCmd.AddCommand(image.GetImageCmd())
@@ -22,4 +25,9 @@ var xInstanceCmd = &cobra.Command{
 
 func GetXInstanceCmd() *cobra.Command {
 	return xInstanceCmd
+}
+
+// SetDebug sets package-level debug flag after CLI flags are parsed.
+func SetDebug(d bool) {
+	debug = d
 }

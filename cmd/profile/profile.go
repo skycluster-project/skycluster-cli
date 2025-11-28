@@ -4,6 +4,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var debug bool
+
 func init() {
 	profileCmd.AddCommand(profileListCmd)
 	profileCmd.AddCommand(profileCreateCmd)
@@ -23,4 +25,9 @@ var profileCmd = &cobra.Command{
 
 func GetProfileCmd() *cobra.Command {
 	return profileCmd
+}
+
+// SetDebug sets package-level debug flag after CLI flags are parsed.
+func SetDebug(d bool) {
+	debug = d
 }

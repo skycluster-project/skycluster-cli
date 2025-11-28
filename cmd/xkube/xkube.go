@@ -4,6 +4,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var debug bool
+
 func init() {
 	xKubeCmd.AddCommand(xKubeCreateCmd)
 	xKubeCmd.AddCommand(xKubeDeleteCmd)
@@ -25,4 +27,9 @@ var xKubeCmd = &cobra.Command{
 
 func GetXKubeCmd() *cobra.Command {
 	return xKubeCmd
+}
+
+// SetDebug sets package-level debug flag after CLI flags are parsed.
+func SetDebug(d bool) {
+	debug = d
 }
